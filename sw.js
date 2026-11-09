@@ -1,5 +1,5 @@
 /* عامل الخدمة: يحفظ ملفات التطبيق ليفتح بلا إنترنت، ويرسل قائمة الانتظار عند عودة الشبكة */
-var VERSION = 'rakan-v2';
+var VERSION = 'rakan-v3';
 var SHELL = ['./', 'index.html', 'style.css', 'app.js', 'sync.js', 'config.js', 'qrcode.js', 'logo.png',
   'icon-192.png', 'icon-512.png', 'manifest.webmanifest', 'fonts/Tajawal-Regular.ttf', 'fonts/Tajawal-Bold.ttf',
   'fonts/Tajawal-ExtraBold.ttf'];

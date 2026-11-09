@@ -413,7 +413,12 @@
 
   function queueDriverStep(step, label) {
     step.label = label;
-    return RK.queueStep(step).then(function (saved) {
+    return S.all('outbox').then(function (box) {
+      // نفس الخطوة لنفس الفاتورة ما زالت في الانتظار: لا نكررها
+      var same = box.filter(function (x) { return !x.final && x.kind === step.kind && (x.rec || x.trip_id) === (step.rec || step.trip_id); })[0];
+      if (same) return same;
+      return RK.queueStep(step);
+    }).then(function (saved) {
       applyLocal(st.drv.items, saved);
       S.set('drv', st.drv);
       render(); pendUI(); flushNow();
@@ -483,7 +488,7 @@
         '</div><div class="stop-b">' + s.items.map(function (a) {
           var nx = actions ? driverNext(a) : null;
           return '<div class="inv tap" data-inv="' + esc(a.rec) + '"><div class="grow"><b>' + (isRet(a) ? 'مرتجع ' : 'فاتورة ') + N(a.inv_number) + '</b> ' +
-            (isRet(a) ? '<span class="badge b-ret">مرتجع</span> ' : '') + badge(a.state, a.state_ar) + (a._pending ? ' <span class="badge">لم تُرسل</span>' : '') +
+            (isRet(a) ? '<span class="badge b-ret">مرتجع</span> ' : '') + badge(a.state, a.state_ar) + (a._pending ? ' <span class="badge">لم تُرسل</span>' : '') + (a.arrive_ok === 'مرفوض' ? ' <span class="badge b-flag">رُفض الوصول</span>' : '') +
             '<div class="small muted">' + esc((a.lines || []).length) + ' صنف · إيصال ' + N(a.rec) + '</div></div>' +
             (nx ? '<button class="btn ' + (nx.k === 'arrive' ? 'primary' : 'accent') + ' sm" data-step="' + esc(a.rec) + '" data-k="' + nx.k + '">' + esc(nx.t) + '</button>' : '') + '</div>';
         }).join('') + '</div></div>';
@@ -516,7 +521,7 @@
 
   function driverAct(rec, k) {
     var a = findDrv(rec);
-    if (!a) return;
+    if (!a || q('.sheet-bg')) return;   // نافذة مفتوحة بالفعل: نتجاهل الضغطة الثانية
     if (k === 'arrive') return doArrive(a);
     if (k === 'result') return chooseResult(a);
   }
@@ -538,12 +543,14 @@
       loadPhotos(s.el);
       q('[data-no]', s.el).onclick = s.close;
       q('[data-ok]', s.el).onclick = function () {
+        if (this.disabled) return;
+        this.disabled = true;
         // كل فواتير العميل نفسه في المحطة نفسها تُسجّل وصولاً معاً
         var same = st.drv.items.filter(function (x) { return x.trip_id === a.trip_id && x.cust_id === a.cust_id && (x.state === 'on_way' || x.state === 'assigned') && x.trip_started; });
         if (!same.length) same = [a];
         var chain = Promise.resolve();
         same.forEach(function (x) { chain = chain.then(function () { return queueDriverStep(Object.assign({ kind: 'arrive', rec: x.rec }, p || {}), 'وصلت · ' + x.inv_number); }); });
-        chain.then(function () { s.close(); chooseResult(findDrv(a.rec)); });
+        chain.then(function () { s.close(); setTimeout(function () { chooseResult(findDrv(a.rec)); }, 60); });
       };
     });
   }
@@ -714,10 +721,14 @@
       if (al.length) h += '<div class="card"><h2>تنبيهات تحتاج انتباهك (' + N(al.length) + ')</h2><div class="list">' + al.map(function (x, i) {
         var act = '';
         if (x.kind === 'approval' || x.kind === 'far' || x.kind === 'siraj') act = '<button class="btn sm" data-asg="' + esc(x.rec) + '">فتح</button>';
+        if (x.kind === 'arrive') act = '<button class="btn sm" data-asg="' + esc(x.rec) + '">التفاصيل</button><button class="btn sm primary" data-arok="' + esc(x.rec) + '">اعتماد</button>';
         if (x.kind === 'device') act = '<button class="btn sm primary" data-dev="' + esc(x.user_id) + '">اعتماد</button><button class="btn sm ghost" data-devno="' + esc(x.user_id) + '">رفض</button>';
         if (x.kind === 'locs') act = '<button class="btn sm" data-goto="locs">مراجعة</button>';
-        return '<div class="alert' + (x.kind === 'siraj' || x.kind === 'far' ? ' err' : '') + '"><span class="t">' + esc(x.text) + '</span>' + act + '</div>';
-      }).join('') + '</div></div>';
+        return '<div class="alert' + (x.kind === 'siraj' || x.kind === 'far' || x.flag ? ' err' : '') + '"><span class="t">' + esc(x.text) + '</span>' + act + '</div>';
+      }).join('') + '</div>' + (function () {
+        var clean = al.filter(function (x) { return x.kind === 'arrive' && !x.flag; });
+        return clean.length > 1 ? '<button class="btn primary" data-arall style="margin-top:10px">اعتماد كل الوصولات السليمة (' + clean.length + ')</button>' : '';
+      })() + '</div>';
       var open = ses.session && ses.session.status === 'مفتوحة';
       var pend = b.pending.filter(function (p) { return p.region_id === reg; });
       h += '<div class="sec-title"><h2>بانتظار التعيين (' + N(pend.length) + ')</h2></div>';
@@ -780,6 +791,13 @@
       if (ro) ro.onclick = function () { askReason('إعادة فتح اليوم', 'سبب إعادة الفتح').then(function (r) { if (r) call('session_open', { region_id: st.region, date: b.date, reason: r }).then(loadBoard).then(render).catch(function (e) { toast(e.message, true); }); }); };
       qa('[data-close]', m).forEach(function (x) { x.onclick = function () { closeDay(x.dataset.close); }; });
       qa('[data-asg]', m).forEach(function (x) { x.onclick = function () { openAsg(x.dataset.asg); }; });
+      qa('[data-arok]', m).forEach(function (x) { x.onclick = function () { busy(x, true); call('arrive_decide', { rec: x.dataset.arok, approve: true }).then(function () { toast('اعتُمد الوصول'); return loadBoard(); }).then(render).catch(function (e) { busy(x, false); toast(e.message, true); }); }; });
+      var arall = q('[data-arall]', m);
+      if (arall) arall.onclick = function () {
+        var recs = b.alerts.filter(function (x) { return x.kind === 'arrive' && !x.flag; }).map(function (x) { return x.rec; });
+        busy(arall, true);
+        call('arrive_decide', { recs: recs, approve: true }).then(function (r) { toast('اعتُمد ' + r.done + ' وصول'); return loadBoard(); }).then(render).catch(function (e) { busy(arall, false); toast(e.message, true); });
+      };
       qa('[data-goto]', m).forEach(function (x) { x.onclick = function () { st.tab = x.dataset.goto; render(); refresh(false); }; });
       qa('[data-dev]', m).forEach(function (x) { x.onclick = function () { call('approve_device', { user_id: x.dataset.dev }).then(function () { toast('اعتُمد الهاتف الجديد'); return loadBoard(); }).then(render).catch(function (e) { toast(e.message, true); }); }; });
       qa('[data-devno]', m).forEach(function (x) { x.onclick = function () { askReason('رفض الهاتف الجديد', 'السبب').then(function (r) { if (r) call('approve_device', { user_id: x.dataset.devno, reject: true, reason: r }).then(loadBoard).then(render).catch(function (e) { toast(e.message, true); }); }); }; });
@@ -826,11 +844,11 @@
     var mine = b.active.filter(function (a) { return a.region_id === reg && a.state !== 'canceled'; });
     var notClosed = mine.filter(function (a) { return a.state !== 'closed'; });
     var noBack = mine.filter(function (a) { return ['delivered', 'partial', 'picked'].indexOf(a.result) >= 0 && !a.back_at; });
-    var wait = mine.filter(function (a) { return a.approval === 'بانتظار الاعتماد'; });
+    var wait = mine.filter(function (a) { return a.approval === 'بانتظار الاعتماد' || a.arrive_ok === 'بانتظار'; });
     var stale = b.alerts.filter(function (x) { return x.kind === 'stale'; });
     var row = function (t, list, bad) { return '<div class="alert' + (bad && list.length ? ' err' : '') + '" style="' + (list.length ? '' : 'background:var(--ok-soft)') + '"><span class="t">' + esc(t) + ': ' + list.length + '</span></div>'; };
     sheet('إغلاق يوم العمل', '<p style="margin:0">قائمة التدقيق قبل الإغلاق:</p>' + row('فواتير لم تُغلق (تُرحّل لليوم التالي في عهدة السائق)', notClosed) +
-      row('إيصالات موقّعة لم تعد بعد', noBack) + row('طلبات بانتظار اعتمادك', wait, true) + row('هواتف لم ترسل بياناتها', stale) +
+      row('إيصالات موقّعة لم تعد بعد', noBack) + row('طلبات ووصولات بانتظار اعتمادك', wait, true) + row('هواتف لم ترسل بياناتها', stale) +
       (wait.length ? '<div class="msg err">لا يمكن الإغلاق قبل البت في الطلبات بانتظار الاعتماد.</div>' : '<div class="msg info">بعد الإغلاق يُنشأ ملخص اليوم ويُقفل، وأي تراجع بعده للمدير فقط.</div>') +
       '<button class="btn danger big" data-c' + (wait.length ? ' disabled' : '') + '>إغلاق اليوم</button>', function (s) {
       var c = q('[data-c]', s.el);
@@ -858,7 +876,7 @@
         if (a.state === 'canceled' && f.state !== 'all') return false;
         if (f.driver && a.driver_id !== f.driver) return false;
         if (f.state === 'open') return a.state !== 'closed';
-        if (f.state === 'wait') return a.approval === 'بانتظار الاعتماد' || a.state === 'to_store' || a.state === 'picked';
+        if (f.state === 'wait') return a.approval === 'بانتظار الاعتماد' || a.arrive_ok === 'بانتظار' || a.state === 'to_store' || a.state === 'picked';
         if (f.state === 'flag') return a.arrive_flag || a.siraj;
         return true;
       });
@@ -866,7 +884,7 @@
       var h = '<div class="kpis"><div class="kpi"><span>قيد الانتظار</span><b>' + N(cnt(function (a) { return a.state === 'assigned'; })) + '</b></div>' +
         '<div class="kpi"><span>في الطريق</span><b>' + N(cnt(function (a) { return a.state === 'on_way' || a.state === 'arrived'; })) + '</b></div>' +
         '<div class="kpi"><span>تم التسليم</span><b>' + N(cnt(function (a) { return a.result === 'delivered'; })) + '</b></div>' +
-        '<div class="kpi warn"><span>تحتاج إجراء</span><b>' + N(cnt(function (a) { return a.approval === 'بانتظار الاعتماد'; })) + '</b></div></div>';
+        '<div class="kpi warn"><span>تحتاج إجراء</span><b>' + N(cnt(function (a) { return a.approval === 'بانتظار الاعتماد' || a.arrive_ok === 'بانتظار'; })) + '</b></div></div>';
       h += '<div class="row"><select class="input grow" id="fd" aria-label="السائق"><option value="">كل السائقين</option>' + b.drivers.map(function (d) { return '<option value="' + esc(d.id) + '"' + (f.driver === d.id ? ' selected' : '') + '>' + esc(d.name) + '</option>'; }).join('') + '</select>' +
         '<select class="input grow" id="fs" aria-label="الحالة">' + [['open', 'المفتوحة'], ['wait', 'تحتاج إجراء'], ['flag', 'عليها تنبيه'], ['all', 'الكل']].map(function (o) { return '<option value="' + o[0] + '"' + (f.state === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>';
       if (!list.length) return h + '<div class="card empty">لا توجد فواتير</div>';
@@ -874,7 +892,9 @@
         return '<div class="item tap" data-asg="' + esc(a.rec) + '"><div class="main"><b>' + esc(a.cust_name) + '</b><div class="meta">' + (isRet(a) ? '<span class="badge b-ret">مرتجع</span>' : '') +
           '<span>فاتورة ' + N(a.inv_number) + '</span><span>' + esc(a.driver_name) + '</span><span>إيصال ' + N(a.rec) + '</span>' + (a.carried ? '<span class="badge b-partial">مرحّلة ' + N(a.carried) + '</span>' : '') + '</div></div>' +
           '<div style="text-align:end">' + badge(a.state, a.state_ar) + (a.arrive_flag ? '<br><span class="badge b-flag">' + esc(a.arrive_flag) + '</span>' : '') + (a.siraj ? '<br><span class="badge b-flag">' + esc(a.siraj) + '</span>' : '') +
-          (a.approval === 'بانتظار الاعتماد' ? '<br><span class="badge b-partial">بانتظار الاعتماد</span>' : '') + '<div class="small muted">' + hm(a.updated) + '</div></div></div>';
+          (a.approval === 'بانتظار الاعتماد' ? '<br><span class="badge b-partial">بانتظار الاعتماد</span>' : '') +
+          (a.arrive_ok === 'بانتظار' ? '<br><span class="badge b-partial">وصول بانتظار الاعتماد</span>' : a.arrive_ok === 'مرفوض' ? '<br><span class="badge b-flag">وصول مرفوض</span>' : '') +
+          '<div class="small muted">' + hm(a.updated) + '</div></div></div>';
       }).join('') + '</div>';
       return h;
     },
@@ -896,6 +916,18 @@
       ['قرار المشرف: ' + a.decision, a.decision && a.updated], ['عاد الإيصال الموقّع', a.back_at], ['تأكيد المخزن', a.store_at], ['أُغلقت', a.closed_at]]
       .filter(function (x) { return x[1]; }).map(function (x) { return '<div>' + esc(x[0]) + ' · ' + hm(x[1]) + ' <span class="muted small">' + N(String(x[1]).slice(0, 10)) + '</span></div>'; }).join('');
     var acts = '';
+    var arr = '';
+    if (a.arrive_at) {
+      var okTxt = { 'بانتظار': '<span class="badge b-partial">بانتظار اعتمادك</span>', 'معتمد': '<span class="badge b-delivered">معتمد</span>',
+        'مرفوض': '<span class="badge b-flag">مرفوض</span>', 'تلقائي': '<span class="badge b-delivered">داخل النطاق</span>' }[a.arrive_ok] || '';
+      arr = '<div class="card" style="padding:12px"><div class="row"><b class="grow">الوصول ' + hm(a.arrive_at) + '</b>' + okTxt + '</div>' +
+        '<div class="small" style="margin-top:4px">' + (a.arrive_flag === 'بلا موقع' ? 'لم يرسل الهاتف موقعاً (GPS مغلق أو ضعيف)' :
+          a.arrive_dist !== '' ? 'على بعد <b class="num">' + N(num(a.arrive_dist)) + ' م</b> من الموقع المعتمد للمحل' + (a.arrive_flag ? ' · <b style="color:var(--err)">' + esc(a.arrive_flag) + '</b>' : '') :
+          'لا يوجد موقع معتمد لهذا العميل، وسُجّل موقع السائق كموقع مقترح') + (a.arrive_acc ? ' · دقة ±' + N(a.arrive_acc) + ' م' : '') + '</div>' +
+        (a.arrive_by ? '<div class="small muted">' + (a.arrive_ok === 'مرفوض' ? 'رفضه ' : 'اعتمده ') + esc(a.arrive_by) + (a.arrive_note ? ' · ' + esc(a.arrive_note) : '') + '</div>' : '') +
+        '<div class="row" style="margin-top:8px">' + (a.arrive_lat ? '<a class="btn sm ghost" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + a.arrive_lat + ',' + a.arrive_lng + '">' + ICON.pin + ' موقع السائق</a>' : '') +
+        (sup && a.arrive_ok === 'بانتظار' ? '<button class="btn sm primary" data-aok>اعتماد الوصول</button><button class="btn sm danger" data-ano>رفض الوصول</button>' : '') + '</div></div>';
+    }
     if (sup) {
       if (a.approval === 'بانتظار الاعتماد') {
         var opts = a.state === 'failed' ? [['retry', 'إعادة محاولة التسليم'], ['to_store', 'إرجاع للمخزن']]
@@ -910,7 +942,7 @@
       '<div class="row"><b class="grow">' + esc(a.cust_name) + '</b>' + badge(a.state, a.state_ar) + '</div>' +
       (a.siraj ? '<div class="msg err">' + esc(a.siraj) + ' بعد تعيينها. راجع الفاتورة في سراج قبل أي قرار.</div>' : '') +
       (a.net !== undefined && a.net !== '' ? '<div class="small muted">الصافي: ' + N(num(a.net)) + ' د.ل</div>' : '') +
-      '<div class="timeline">' + tl + '</div>' +
+      '<div class="timeline">' + tl + '</div>' + arr +
       (a.partial && a.partial.length ? '<div><div class="lbl">النقص/التالف</div>' + itemsTable(a.partial) + '</div>' : '') +
       (a.photos && a.photos.length ? '<div><div class="lbl">الصور</div><div class="photos">' + a.photos.map(function (p) { return '<div class="ph" data-ph="' + esc(p) + '">…</div>'; }).join('') + '</div></div>' : '') +
       '<div><div class="lbl">الأصناف</div>' + itemsTable(a.lines) + '</div>' + acts,
@@ -925,6 +957,12 @@
             p.then(function (r) { if (r === null) return; call('decide', { rec: a.rec, decision: d, reason: r }).then(function () { done('تم حفظ القرار'); }).catch(fail); });
           };
         });
+        var aok = q('[data-aok]', s.el), ano = q('[data-ano]', s.el);
+        if (aok) aok.onclick = function () { busy(aok, true); call('arrive_decide', { rec: a.rec, approve: true }).then(function () { done('اعتُمد الوصول'); }).catch(function (e) { busy(aok, false); fail(e); }); };
+        if (ano) ano.onclick = function () {
+          askReason('رفض الوصول', 'سبب الرفض (يظهر للمدير وفي تقرير السائق)', { choices: ['السائق لم يكن عند المحل', 'الموقع بعيد جداً', 'وصول بلا موقع'] })
+            .then(function (r) { if (r) call('arrive_decide', { rec: a.rec, reason: r }).then(function () { done('سُجّل رفض الوصول'); }).catch(fail); });
+        };
         var u = q('[data-undo]', s.el);
         if (u) u.onclick = function () { askReason('تراجع خطوة', 'سبب التراجع (إلزامي ويظهر للمدير)', { choices: ['ضغط «وصلت» بالخطأ', 'سجّل النتيجة بالخطأ', 'تصحيح بعد التحقق'] }).then(function (r) { if (r) call('undo', { rec: a.rec, reason: r }).then(function () { done('تم التراجع'); }).catch(fail); }); };
         var c = q('[data-cancel]', s.el);
@@ -1226,8 +1264,8 @@
         '<div class="chips" style="margin-top:10px">' + [['d', 'اليوم'], ['w', 'آخر 7 أيام'], ['m', 'هذا الشهر']].map(function (p) { return '<button class="chip" data-per="' + p[0] + '">' + p[1] + '</button>'; }).join('') +
         '</div><div class="row" style="margin-top:10px"><button class="btn primary" data-run>عرض</button><button class="btn ghost" data-csv>تصدير Excel</button><button class="btn ghost" data-prn>' + ICON.print + ' طباعة</button></div></div>';
       if (!r) return h + '<div class="loading"><span class="spin"></span></div>';
-      h += '<div class="card"><h2>أداء السائقين</h2>' + (r.drivers.length ? '<div class="scroll-x"><table class="tbl"><thead><tr><th>السائق</th><th>فواتير</th><th>سُلّمت</th><th>جزئي</th><th>تعذّر</th><th>مرتجعات</th><th>مفتوحة</th><th>خارج النطاق</th><th>نسبة التعذّر</th></tr></thead><tbody>' +
-        r.drivers.map(function (d) { return '<tr><td>' + esc(d.driver) + '</td><td>' + N(d.total) + '</td><td>' + N(d.delivered) + '</td><td>' + N(d.partial) + '</td><td>' + N(d.failed) + '</td><td>' + N(d.returns) + '</td><td>' + N(d.open) + '</td><td>' + N(d.far) + '</td><td>' + N(d.total ? Math.round(d.failed * 100 / d.total) + '%' : '—') + '</td></tr>'; }).join('') +
+      h += '<div class="card"><h2>أداء السائقين</h2>' + (r.drivers.length ? '<div class="scroll-x"><table class="tbl"><thead><tr><th>السائق</th><th>فواتير</th><th>سُلّمت</th><th>جزئي</th><th>تعذّر</th><th>مرتجعات</th><th>مفتوحة</th><th>خارج النطاق</th><th>وصول مرفوض</th><th>نسبة التعذّر</th></tr></thead><tbody>' +
+        r.drivers.map(function (d) { return '<tr><td>' + esc(d.driver) + '</td><td>' + N(d.total) + '</td><td>' + N(d.delivered) + '</td><td>' + N(d.partial) + '</td><td>' + N(d.failed) + '</td><td>' + N(d.returns) + '</td><td>' + N(d.open) + '</td><td>' + N(d.far) + '</td><td>' + N(d.rejected || 0) + '</td><td>' + N(d.total ? Math.round(d.failed * 100 / d.total) + '%' : '—') + '</td></tr>'; }).join('') +
         '</tbody></table></div>' : '<p class="muted">لا توجد بيانات للفترة</p>') + '</div>';
       h += '<div class="card"><h2>الفواتير (' + N(r.items.length) + ')</h2><div class="scroll-x"><table class="tbl"><thead><tr><th>الإيصال</th><th>الفاتورة</th><th>العميل</th><th>السائق</th><th>الحالة</th><th>الوصول</th><th>النتيجة</th></tr></thead><tbody>' +
         r.items.map(function (a) { return '<tr><td>' + N(a.rec) + '</td><td>' + N(a.inv_number) + '</td><td>' + esc(a.cust_name) + '</td><td>' + esc(a.driver_name) + '</td><td>' + badge(a.state, a.state_ar) + '</td><td>' + hm(a.arrive_at) + (a.arrive_flag ? ' <span class="badge b-flag">' + esc(a.arrive_flag) + '</span>' : '') + '</td><td>' + hm(a.result_at) + ' ' + esc(a.reason || '') + '</td></tr>'; }).join('') +
@@ -1520,6 +1558,10 @@
         f('gps_min_acc', 'أسوأ دقة مقبولة لتسجيل موقع عميل (متر)', 'number') +
         f('stale_min', 'تنبيه عن هاتف لم يرسل منذ (دقيقة)', 'number') +
         f('photo_months', 'مدة الاحتفاظ بالصور قبل الأرشفة (شهر)', 'number') +
+        '<div class="field"><label for="s_arrive_approval">اعتماد المشرف لوصول السائق</label><select id="s_arrive_approval" class="input">' +
+          [['المخالف فقط', 'الوصول المخالف فقط (خارج النطاق، أو بلا موقع، أو عميل بلا موقع معتمد)'], ['الكل', 'كل وصول يحتاج اعتماد المشرف'], ['لا', 'بلا اعتماد (تنبيه فقط)']]
+            .map(function (o) { return '<option value="' + o[0] + '"' + ((s.arrive_approval || 'المخالف فقط') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
+          '</select><span class="small muted">الاعتماد لا يوقف السائق عن التسليم، لكن لا يُغلق اليوم قبل البت فيه</span></div>' +
         '<label class="chk"><input type="checkbox" id="s_show_amounts"' + (s.show_amounts === 'نعم' ? ' checked' : '') + '> إظهار المبالغ على إيصال العميل</label>' +
         f('manager_email', 'بريد المدير (لرموز التحقق)', 'email', '', ' dir="ltr"') +
         '<button class="btn primary big" id="ssv">حفظ الإعدادات</button></form></div>' +
@@ -1533,7 +1575,7 @@
         var b = q('#ssv', m); busy(b, true);
         var v = function (k) { return q('#s_' + k, m).value.trim(); };
         call('settings_save', { settings: { start_date: v('start_date'), alert_m: v('alert_m'), gps_min_acc: v('gps_min_acc'), stale_min: v('stale_min'),
-          photo_months: v('photo_months'), manager_email: v('manager_email'), show_amounts: q('#s_show_amounts', m).checked ? 'نعم' : 'لا' } })
+          photo_months: v('photo_months'), manager_email: v('manager_email'), arrive_approval: q('#s_arrive_approval', m).value, show_amounts: q('#s_show_amounts', m).checked ? 'نعم' : 'لا' } })
           .then(function (r) { busy(b, false); st.settings = r.settings; S.set('settings', r.settings); toast('حُفظت الإعدادات'); })
           .catch(function (e2) { busy(b, false); toast(e2.message, true); });
       };
