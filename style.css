@@ -52,9 +52,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .iconbtn { width: 42px; height: 42px; border-radius: 12px; border: 1px solid var(--line); background: var(--card);
   display: inline-grid; place-items: center; cursor: pointer; flex-shrink: 0; }
 .iconbtn svg { width: 20px; height: 20px; }
-.tabs { max-width: 1100px; margin: 0 auto; padding: 0 12px; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.tabs { max-width: 1100px; margin: 0 auto; padding: 0 12px; display: flex; flex-wrap: wrap; gap: 0 4px; }
 .tabs::-webkit-scrollbar { display: none; }
-.tab { border: none; background: none; padding: 10px 12px 11px; font-weight: 700; font-size: 14.5px; color: var(--muted);
+.tab { border: none; background: none; padding: 9px 10px 10px; font-weight: 700; font-size: 14.5px; color: var(--muted);
   border-bottom: 3px solid transparent; cursor: pointer; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
 .tab.on { color: var(--blue); border-bottom-color: var(--orange); }
 .tab .cnt { background: var(--orange); color: #fff; border-radius: 999px; font-size: 11.5px; padding: 0 7px; line-height: 19px; }
@@ -233,3 +233,13 @@ video.scan { width: 100%; border-radius: 14px; background: #000; max-height: 50v
 .p-trip { padding: 11mm 11mm 9mm; display: flex; flex-direction: column; gap: 4mm; height: 297mm; position: relative; }
 .p-trip .p-tbl td, .p-trip .p-tbl th { font-size: 9.5pt; }
 .p-stop td { background: #EEF2F8; font-weight: 800; }
+
+.daypick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.daypick input { min-height: 40px; max-width: 170px; }
+.dropzone { border: 2px dashed var(--line); border-radius: 14px; padding: 22px 16px; text-align: center; cursor: pointer; background: var(--tint); }
+.dropzone.over { border-color: var(--blue); background: var(--blue-soft); }
+.errlist { margin: 0; padding-inline-start: 20px; font-size: 14px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.lcard { border: 1.5px dashed var(--line); border-radius: 12px; padding: 10px 12px; background: var(--card); }
+.lcard b { display: block; }
+.lcard .pin { font-size: 22px; font-weight: 800; letter-spacing: 3px; color: var(--orange); direction: ltr; }

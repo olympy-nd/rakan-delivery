@@ -700,7 +700,10 @@
       var h = '';
       if (b.regions.length > 1) h += '<div class="chips">' + b.regions.map(function (r) { return '<button class="chip' + (r.id === reg ? ' on' : '') + '" data-reg="' + esc(r.id) + '">' + esc(r.name) + '</button>'; }).join('') + '</div>';
       var beat = b.agent.last_beat, late = beat && (Date.now() - parseTs(beat) > 10 * 60000);
-      h += '<div class="card"><div class="row"><div class="grow"><h2 style="margin:0">يوم ' + N(b.date) + ' · ' + esc(regionName(reg)) + '</h2>' +
+      var isToday = b.date === today();
+      h += '<div class="card"><div class="row"><div class="grow"><div class="daypick"><h2 style="margin:0">يوم العمل</h2><input type="date" class="input num" id="dpick" value="' + esc(b.date) + '" aria-label="تاريخ يوم العمل">' +
+        (isToday ? '<span class="badge b-on_way">اليوم</span>' : '<span class="badge b-partial">ليس اليوم</span><button class="btn sm ghost" data-today>العودة لليوم</button>') +
+        (b.regions.length > 1 ? '<span class="muted">· ' + esc(regionName(reg)) + '</span>' : '') + '</div>' +
         '<div class="small ' + (late ? '' : 'muted') + '" style="' + (late ? 'color:var(--orange);font-weight:700' : '') + '">آخر مزامنة من سراج: ' + (beat ? hm(beat) + ' (' + N(beat.slice(0, 10)) + ')' : 'لا يوجد') + (late ? ' · تحقّق من الجهاز الرئيسي' : '') + '</div></div>';
       if (ses.open_other) h += '</div><div class="msg warn" style="margin-top:10px">يوم ' + N(ses.open_other.date) + ' ما زال مفتوحاً لهذه المنطقة. أغلقه أولاً من زر «إغلاق اليوم».</div><button class="btn danger" data-close="' + esc(ses.open_other.id) + '" style="margin-top:10px">إغلاق يوم ' + N(ses.open_other.date) + '</button>';
       else if (!ses.session) h += '<button class="btn accent" data-open>فتح يوم العمل</button></div>';
@@ -763,8 +766,16 @@
       var b = st.board;
       if (!b) return;
       qa('[data-reg]', m).forEach(function (x) { x.onclick = function () { st.region = x.dataset.reg; st.sel = {}; render(); }; });
+      var dp = q('#dpick', m);
+      if (dp) dp.onchange = function () { if (!dp.value) return; st.date = dp.value; st.sel = {}; st.board = null; render(); loadBoard().then(render).catch(function (e) { toast(e.message, true); }); };
+      var td = q('[data-today]', m);
+      if (td) td.onclick = function () { st.date = today(); st.sel = {}; st.board = null; render(); loadBoard().then(render).catch(function (e) { toast(e.message, true); }); };
       var o = q('[data-open]', m);
-      if (o) o.onclick = function () { busy(o, true); call('session_open', { region_id: st.region, date: b.date }).then(function () { toast('فُتح يوم العمل'); return loadBoard(); }).then(render).catch(function (e) { busy(o, false); toast(e.message, true); }); };
+      if (o) o.onclick = function () {
+        var go = function () { busy(o, true); call('session_open', { region_id: st.region, date: b.date }).then(function () { toast('فُتح يوم العمل ' + b.date); return loadBoard(); }).then(render).catch(function (e) { busy(o, false); toast(e.message, true); }); };
+        if (b.date === today()) go();
+        else confirmBox('فتح يوم عمل', 'ستفتح يوم العمل بتاريخ <b class="num">' + esc(b.date) + '</b> وليس اليوم. هل أنت متأكد؟', 'نعم، افتحه').then(function (y) { if (y) go(); });
+      };
       var ro = q('[data-reopen]', m);
       if (ro) ro.onclick = function () { askReason('إعادة فتح اليوم', 'سبب إعادة الفتح').then(function (r) { if (r) call('session_open', { region_id: st.region, date: b.date, reason: r }).then(loadBoard).then(render).catch(function (e) { toast(e.message, true); }); }); };
       qa('[data-close]', m).forEach(function (x) { x.onclick = function () { closeDay(x.dataset.close); }; });
@@ -1260,7 +1271,9 @@
     html: function () {
       var u = st.users;
       if (!u) return '<div class="loading"><span class="spin"></span></div>';
-      var h = '<div class="row"><button class="btn accent" data-new>+ مستخدم جديد</button><button class="btn" data-regs>المناطق (' + N(u.regions.length) + ')</button>' +
+      var h = '<div class="card"><h2>إضافة المستخدمين</h2><p class="muted small" style="margin:0 0 10px">أضف شخصاً واحداً، أو ارفع ملف Excel فيه كل السائقين والمشرفين دفعة واحدة. المناطق المكتوبة في الملف تُنشأ تلقائياً إن لم تكن موجودة.</p>' +
+        '<div class="row"><button class="btn accent" data-new>+ مستخدم جديد</button><button class="btn primary" data-imp>رفع من ملف Excel</button><button class="btn ghost" data-tpl>تحميل نموذج Excel</button></div></div>' +
+        '<div class="row"><button class="btn" data-regs>المناطق (' + N(u.regions.length) + ')</button>' +
         (u.regions.length > 1 ? '<button class="btn ghost" data-cr>توزيع العملاء على المناطق</button>' : '') + '</div>';
       ['supervisor', 'driver', 'storekeeper', 'rep', 'accountant', 'manager'].forEach(function (role) {
         var list = u.users.filter(function (x) { return x.role === role; });
@@ -1279,6 +1292,8 @@
     bind: function (m) {
       if (!st.users) return;
       q('[data-new]', m).onclick = function () { userForm(null); };
+      q('[data-imp]', m).onclick = importUsers;
+      q('[data-tpl]', m).onclick = function () { withXLSX().then(downloadTemplate).catch(function (e) { toast(e.message, true); }); };
       q('[data-regs]', m).onclick = regionsForm;
       var cr = q('[data-cr]', m);
       if (cr) cr.onclick = custRegionsForm;
@@ -1332,6 +1347,134 @@
       };
     });
     return s;
+  }
+
+  /* ---------- رفع المستخدمين من Excel ---------- */
+  var IMP_COLS = [['name', ['الاسم', 'الاسم الكامل', 'name']], ['role', ['الدور', 'الوظيفة', 'role']], ['regions', ['المنطقة', 'المناطق', 'region']],
+    ['truck', ['الشاحنة', 'السيارة', 'truck']], ['phone', ['الهاتف', 'رقم الهاتف', 'phone']], ['username', ['اسم المستخدم', 'اسم المستخدم (اختياري)', 'username']],
+    ['email', ['البريد', 'البريد (اختياري)', 'email']]];
+
+  function withXLSX() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    return new Promise(function (res, rej) {
+      var sc = document.createElement('script');
+      sc.src = 'xlsx.full.min.js';
+      sc.onload = function () { res(window.XLSX); };
+      sc.onerror = function () { rej(new Error('تعذّر تحميل قارئ Excel. تأكد من الإنترنت')); };
+      document.head.appendChild(sc);
+    });
+  }
+
+  function saveBook(X, rows, name, sheetName, widths) {
+    var ws = X.utils.aoa_to_sheet(rows);
+    ws['!cols'] = (widths || []).map(function (w) { return { wch: w }; });
+    ws['!views'] = [{ RTL: true }];
+    var wb = X.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    X.utils.book_append_sheet(wb, ws, sheetName);
+    return wb;
+  }
+
+  function downloadTemplate(X) {
+    var regs = (st.users && st.users.regions || []).map(function (r) { return r.name; });
+    var r1 = regs[0] || 'المنطقة الغربية';
+    var wb = saveBook(X, [['الاسم', 'الدور', 'المنطقة', 'الشاحنة', 'الهاتف', 'اسم المستخدم (اختياري)', 'البريد (اختياري)'],
+      ['علي المقربج', 'سائق', r1, 'إيسوزو 5-12345', '0912345678', '', ''],
+      ['ضوء عمارة', 'سائق', r1, 'هيونداي 5-6789', '0923456789', '', ''],
+      ['أحمد محمد', 'مشرف', r1, '', '0911111111', '', ''],
+      ['سالم علي', 'أمين المخزن', r1, '', '', '', ''],
+      ['محمود سالم', 'مندوب', r1, '', '', '', '']], 'rakan-users-template.xlsx', 'المستخدمون', [22, 14, 22, 20, 16, 22, 24]);
+    var help = X.utils.aoa_to_sheet([['الأدوار المسموحة', 'ملاحظات'], ['سائق', 'المنطقة إلزامية، والشاحنة مستحسنة'], ['مشرف', 'المنطقة إلزامية. لأكثر من منطقة افصل بينها بفاصلة: الغربية، طرابلس'],
+      ['أمين المخزن', 'المنطقة إلزامية'], ['مندوب', 'المنطقة إلزامية'], ['محاسب', 'يرى كل المناطق'], ['مدير', 'يرى كل المناطق، ويُفضّل كتابة بريده'],
+      ['', ''], ['اسم المستخدم', 'اختياري. إن تُرك فارغاً يُنشأ تلقائياً مثل d001 للسائق و s001 للمشرف'], ['المناطق الحالية', regs.join('، ') || 'لا توجد بعد']]);
+    help['!cols'] = [{ wch: 18 }, { wch: 70 }];
+    help['!views'] = [{ RTL: true }];
+    X.utils.book_append_sheet(wb, help, 'تعليمات');
+    X.writeFile(wb, 'rakan-users-template.xlsx');
+  }
+
+  function parseUsersFile(X, file) {
+    return file.arrayBuffer().then(function (buf) {
+      var wb = X.read(buf, { type: 'array' });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var aoa = X.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+      var hi = aoa.findIndex(function (r) { return r.some(function (c) { return String(c).trim() === 'الاسم' || String(c).trim().toLowerCase() === 'name'; }); });
+      if (hi < 0) throw new Error('لم أجد عمود «الاسم» في الصفحة الأولى. استعمل النموذج');
+      var head = aoa[hi].map(function (c) { return String(c).trim(); });
+      var idx = {};
+      IMP_COLS.forEach(function (c) { idx[c[0]] = head.findIndex(function (h) { return c[1].indexOf(h) >= 0 || c[1].indexOf(h.toLowerCase()) >= 0; }); });
+      if (idx.role < 0) throw new Error('لم أجد عمود «الدور». استعمل النموذج');
+      return aoa.slice(hi + 1).filter(function (r) { return r.some(function (c) { return String(c).trim(); }); }).map(function (r) {
+        var o = {};
+        IMP_COLS.forEach(function (c) { o[c[0]] = idx[c[0]] >= 0 ? String(r[idx[c[0]]]).trim() : ''; });
+        return o;
+      });
+    });
+  }
+
+  function importUsers() {
+    var rows = null;
+    var s = sheet('رفع المستخدمين من ملف Excel', '<div class="msg info">الملف يحتوي عمود <b>الاسم</b> و<b>الدور</b> و<b>المنطقة</b>، ويمكن إضافة <b>الشاحنة</b> و<b>الهاتف</b>. حمّل النموذج إن لم يكن لديك ملف.</div>' +
+      '<label class="dropzone" id="dz"><input type="file" id="uf" accept=".xlsx,.xls,.csv" hidden><b>اختر ملف Excel</b><div class="small muted">أو اسحبه وأفلته هنا</div></label>' +
+      '<div id="ires"></div>', function (s) {
+      var dz = q('#dz', s.el), inp = q('#uf', s.el), out = q('#ires', s.el);
+      ['dragover', 'dragenter'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add('over'); }); });
+      ['dragleave', 'drop'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove('over'); }); });
+      dz.addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) handle(e.dataTransfer.files[0]); });
+      inp.onchange = function () { if (inp.files[0]) handle(inp.files[0]); };
+      function handle(file) {
+        out.innerHTML = '<div class="loading"><span class="spin"></span> جارٍ قراءة الملف…</div>';
+        withXLSX().then(function (X) { return parseUsersFile(X, file); }).then(function (r) {
+          rows = r;
+          return call('users_import', { rows: rows, dry: true });
+        }).then(function (res) {
+          var sm = res.summary;
+          var h = '<div class="msg ' + (res.errors.length ? 'err' : 'ok') + '">في الملف ' + sm.total + ' صفاً: ' + sm.ok + ' جاهز' + (res.errors.length ? ' و' + res.errors.length + ' فيه أخطاء' : '') + '.</div>';
+          if (res.errors.length) h += '<div class="card"><h3>صحّح هذه الصفوف في الملف ثم ارفعه مرة أخرى</h3><ul class="errlist">' + res.errors.map(function (e) {
+            return '<li>الصف ' + N(e.line) + (e.name ? ' (' + esc(e.name) + ')' : '') + ': ' + esc(e.errors.join('، ')) + '</li>'; }).join('') + '</ul></div>';
+          if (sm.new_regions.length) h += '<div class="msg info">ستُنشأ هذه المناطق الجديدة: ' + esc(sm.new_regions.join('، ')) + '</div>';
+          var ok = rows.filter(function (r, i) { return !res.errors.some(function (e) { return e.line === i + 2; }); });
+          h += '<div class="card scroll-x"><table class="tbl"><thead><tr><th>الاسم</th><th>الدور</th><th>المنطقة</th><th>الشاحنة</th><th>الهاتف</th></tr></thead><tbody>' +
+            ok.slice(0, 50).map(function (r) { return '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.role) + '</td><td>' + esc(r.regions) + '</td><td>' + esc(r.truck) + '</td><td class="num">' + esc(r.phone) + '</td></tr>'; }).join('') +
+            '</tbody></table>' + (ok.length > 50 ? '<p class="small muted">و' + (ok.length - 50) + ' آخرون</p>' : '') + '</div>';
+          if (!res.errors.length) h += '<button class="btn accent big" data-go>إنشاء ' + sm.ok + ' مستخدم</button>';
+          out.innerHTML = h;
+          var g = q('[data-go]', out);
+          if (g) g.onclick = function () {
+            busy(g, true);
+            call('users_import', { rows: rows }).then(function (r2) { s.close(); showCreated(r2.created); VIEWS.users.load().then(render); })
+              .catch(function (e) { busy(g, false); toast(e.message, true); });
+          };
+        }).catch(function (e) { out.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+      }
+    });
+    return s;
+  }
+
+  function showCreated(list) {
+    var link = location.origin + location.pathname;
+    sheet('أُنشئ ' + list.length + ' مستخدم', '<div class="msg warn">هذه الأرقام السرية المؤقتة لن تظهر مرة أخرى. اطبعها أو نزّلها الآن، وأعطِ كل شخص بطاقته. يغيّر كل واحد رقمه عند أول دخول.</div>' +
+      '<div class="row"><button class="btn primary" data-pc>' + ICON.print + ' طباعة بطاقات الدخول</button><button class="btn ghost" data-xl>تنزيل Excel</button></div>' +
+      '<div class="cards">' + list.map(function (u) {
+        return '<div class="lcard"><b>' + esc(u.name) + '</b><div class="small muted">' + esc(u.role_ar) + (u.regions ? ' · ' + esc(u.regions) : '') + (u.truck ? ' · ' + esc(u.truck) : '') + '</div>' +
+          '<div class="small">اسم المستخدم: <b class="ltr" style="display:inline">' + esc(u.username) + '</b></div><div class="pin">' + esc(u.pin) + '</div></div>';
+      }).join('') + '</div>', function (s) {
+      q('[data-pc]', s.el).onclick = function () {
+        var P = document.getElementById('print');
+        P.innerHTML = '<div style="padding:10mm;font-family:Tajawal,sans-serif;display:grid;grid-template-columns:1fr 1fr;gap:6mm">' + list.map(function (u) {
+          return '<div style="border:1.5px dashed #777;border-radius:4mm;padding:5mm;break-inside:avoid"><div class="p-head" style="padding-bottom:2mm"><img src="logo.png" alt="" style="height:10mm"><div class="t"><b style="font-size:12pt">بطاقة دخول تطبيق التتبع</b></div></div>' +
+            '<div style="margin-top:3mm;font-size:12pt"><b>' + esc(u.name) + '</b> · ' + esc(u.role_ar) + '</div><div style="font-size:11pt;margin-top:2mm">اسم المستخدم: <b dir="ltr">' + esc(u.username) + '</b></div>' +
+            '<div style="font-size:11pt">الرقم السري المؤقت: <b dir="ltr" style="font-size:16pt;letter-spacing:2px">' + esc(u.pin) + '</b></div><div style="font-size:9pt;margin-top:2mm;color:#444">الرابط: <span dir="ltr">' + esc(link) + '</span><br>غيّر الرقم السري عند أول دخول ولا تعطه لأحد.</div></div>';
+        }).join('') + '</div>';
+        setTimeout(function () { window.print(); }, 150);
+      };
+      q('[data-xl]', s.el).onclick = function () {
+        withXLSX().then(function (X) {
+          var wb = saveBook(X, [['الاسم', 'الدور', 'المنطقة', 'الشاحنة', 'اسم المستخدم', 'الرقم السري المؤقت']].concat(list.map(function (u) { return [u.name, u.role_ar, u.regions, u.truck, u.username, u.pin]; })), '', 'بيانات الدخول', [22, 14, 22, 20, 16, 18]);
+          X.writeFile(wb, 'rakan-logins.xlsx');
+        }).catch(function (e) { toast(e.message, true); });
+      };
+    });
   }
 
   function regionsForm() {
