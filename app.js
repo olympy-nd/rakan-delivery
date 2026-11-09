@@ -197,9 +197,9 @@
   /* ===================== الهيكل ===================== */
   var TABS = {
     manager: [['today', 'اليوم'], ['follow', 'المتابعة'], ['trips', 'الكشوف'], ['back', 'الإيصالات والمخزن'], ['locs', 'المواقع'],
-      ['reports', 'التقارير'], ['fin', 'المالية'], ['users', 'المستخدمون'], ['settings', 'الإعدادات'], ['audit', 'سجل التدقيق']],
+      ['reports', 'التقارير'], ['users', 'المستخدمون'], ['settings', 'الإعدادات'], ['audit', 'سجل التدقيق']],
     supervisor: [['today', 'اليوم'], ['follow', 'المتابعة'], ['trips', 'الكشوف'], ['back', 'الإيصالات والمخزن'], ['locs', 'المواقع'], ['reports', 'التقارير']],
-    accountant: [['fin', 'المالية'], ['follow', 'المتابعة'], ['reports', 'التقارير']],
+    accountant: [['follow', 'المتابعة'], ['reports', 'التقارير']],
     storekeeper: [['back', 'الإيصالات والمخزن']],
     rep: [['addloc', 'تسجيل موقع عميل']],
     driver: [['my', 'فواتيري'], ['mysum', 'ملخصي']]
@@ -1644,11 +1644,6 @@
       q('#au', m).onchange = go;
     }
   };
-
-  // المنظومة الأولى: التقارير المالية (fin.js)
-  if (window.RKFIN) try { window.RKFIN({ esc: esc, q: q, qa: qa, call: call, sheet: sheet, toast: toast, busy: busy, ICON: ICON, st: st,
-    VIEWS: VIEWS, render: render, withXLSX: withXLSX, saveBook: saveBook, confirmBox: confirmBox, askReason: askReason,
-    onLogout: function (f) { logoutHooks.push(f); } }); } catch (e) { if (window.console) console.error(e); }
 
   boot();
 })();
