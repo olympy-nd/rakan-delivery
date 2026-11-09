@@ -110,6 +110,14 @@
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
       navigator.serviceWorker.register('sw.js').catch(function () {});
       navigator.serviceWorker.addEventListener('message', function (e) { if (e.data && e.data.type === 'flushed') afterFlush(); });
+      // عند وصول نسخة جديدة من التطبيق: إعادة تحميل الصفحة مرة واحدة لتظهر فوراً
+      var hadCtl = !!navigator.serviceWorker.controller, reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!hadCtl || reloaded) { hadCtl = true; return; }
+        reloaded = true;
+        RK.pendingCount().then(function (p) { if (!q('.sheet-bg')) location.reload(); else toast('وصلت نسخة جديدة من التطبيق. أعد فتحه بعد إنهاء ما تقوم به'); });
+      });
+      navigator.serviceWorker.getRegistration().then(function (reg) { if (reg) reg.update(); });
     }
     window.addEventListener('online', function () { st.online = true; netUI(); flushNow(); });
     window.addEventListener('offline', function () { st.online = false; netUI(); });
