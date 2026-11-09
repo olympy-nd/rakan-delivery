@@ -1071,11 +1071,26 @@
 
   /* ===================== الإيصالات العائدة والمخزن ===================== */
   VIEWS.back = {
-    load: function () { return call('store_list').then(function (r) { st.store = r.items; }); },
+    load: function () { return call('store_list').then(function (r) { st.store = r.items; st.rcpts = r.receipts || []; }); },
     html: function () {
       var h = '<div class="card"><h2>استلام الإيصالات الموقّعة</h2><p class="muted small" style="margin:0 0 10px">امسح رمز QR على النسخة العائدة، أو اكتب رقم الإيصال ورمز التحقق المطبوع بجانبه.</p>' +
         '<button class="btn primary big" data-scan>' + ICON.qr + ' مسح رمز QR</button><div class="row" style="margin-top:12px"><input class="input grow num" id="br" placeholder="رقم الإيصال مثل 00184-2" inputmode="text">' +
         '<input class="input num" id="bc" placeholder="الرمز" inputmode="numeric" maxlength="4" style="max-width:110px"><button class="btn" data-man>تأكيد</button></div><div id="bres"></div></div>';
+      var rc = st.rcpts;
+      h += '<div class="sec-title"><h2>إيصالات موقّعة بانتظار العودة' + (rc ? ' (' + N(rc.length) + ')' : '') + '</h2></div>';
+      if (!rc) h += '<div class="loading"><span class="spin"></span></div>';
+      else if (!rc.length) h += '<div class="card empty">لا توجد إيصالات معلّقة. كل ما سلّمه السائقون عادت إيصالاته.</div>';
+      else {
+        var byD = {}, ord = [];
+        rc.forEach(function (a) { if (!byD[a.driver_name]) { byD[a.driver_name] = []; ord.push(a.driver_name); } byD[a.driver_name].push(a); });
+        h += ord.map(function (dn) {
+          return '<div class="card"><h3>' + esc(dn) + ' (' + N(byD[dn].length) + ')</h3><div class="list">' + byD[dn].map(function (a) {
+            return '<div class="item"><div class="main"><b>' + esc(a.cust_name) + '</b><div class="meta">' + (isRet(a) ? '<span class="badge b-ret">مرتجع</span>' : '') + badge(a.result, STATE_AR[a.result]) +
+              '<span>فاتورة ' + N(a.inv_number) + '</span><span>إيصال ' + N(a.rec) + '</span><span>' + hm(a.result_at) + ' ' + N(String(a.result_at).slice(0, 10)) + '</span>' +
+              (a.carried ? '<span class="badge b-partial">مرحّلة ' + N(a.carried) + '</span>' : '') + '</div></div><button class="btn sm primary" data-rb="' + esc(a.rec) + '">استلام الإيصال</button></div>';
+          }).join('') + '</div></div>';
+        }).join('');
+      }
       var items = st.store;
       h += '<div class="sec-title"><h2>بضاعة عائدة بانتظار تأكيد المخزن' + (items ? ' (' + N(items.length) + ')' : '') + '</h2></div>';
       if (!items) h += '<div class="loading"><span class="spin"></span></div>';
@@ -1090,6 +1105,24 @@
       q('[data-scan]', m).onclick = scanQR;
       q('[data-man]', m).onclick = function () { receiptBack({ rec: q('#br').value.trim(), code: q('#bc').value.trim() }); };
       qa('[data-st]', m).forEach(function (x) { x.onclick = function () { storeConfirm(x.dataset.st); }; });
+      qa('[data-rb]', m).forEach(function (x) {
+        x.onclick = function () {
+          var a = (st.rcpts || []).filter(function (r) { return r.rec === x.dataset.rb; })[0];
+          sheet('استلام إيصال ' + a.rec, '<b>' + esc(a.cust_name) + ' · فاتورة ' + N(a.inv_number) + ' · ' + esc(a.driver_name) + '</b>' +
+            '<div class="msg info">تأكد أن الإيصال موقّع ومختوم من العميل، ثم اكتب <b>رمز التحقق</b> المطبوع تحت رمز QR على النسخة العائدة. نسخة العميل لا تحمل هذا الرمز.</div>' +
+            '<div class="field"><label for="rbc">رمز التحقق (4 أرقام)</label><input id="rbc" class="input pin" inputmode="numeric" maxlength="4"></div><div id="rbe"></div>' +
+            '<button class="btn primary big" data-ok>تأكيد الاستلام</button>', function (s) {
+            var inp = q('#rbc', s.el); setTimeout(function () { inp.focus(); }, 50);
+            q('[data-ok]', s.el).onclick = function () {
+              var b = q('[data-ok]', s.el); busy(b, true);
+              call('receipt_back', { rec: a.rec, code: inp.value.trim() }).then(function (r) {
+                s.close(); toast('تم استلام الإيصال · الحالة الآن: ' + r.state_ar);
+                VIEWS.back.load().then(render);
+              }).catch(function (e) { busy(b, false); q('#rbe', s.el).innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+            };
+          });
+        };
+      });
     }
   };
 
@@ -1100,6 +1133,7 @@
       if (out) out.innerHTML = '<div class="msg ' + (r.already ? 'warn' : 'ok') + '" style="margin-top:10px">' + esc(msg) + '</div>';
       toast(r.already ? 'مسجّل من قبل' : 'تم استلام الإيصال');
       var br = q('#br'), bc = q('#bc'); if (br) br.value = ''; if (bc) bc.value = '';
+      VIEWS.back.load().then(function () { if (st.tab === 'back') { render(); var o2 = q('#bres'); if (o2) o2.innerHTML = '<div class="msg ' + (r.already ? 'warn' : 'ok') + '" style="margin-top:10px">' + esc(msg) + '</div>'; } });
     }).catch(function (e) { if (out) out.innerHTML = '<div class="msg err" style="margin-top:10px">' + esc(e.message) + '</div>'; toast(e.message, true); });
   }
 
