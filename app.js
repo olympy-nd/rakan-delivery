@@ -196,11 +196,11 @@
 
   /* ===================== الهيكل ===================== */
   var TABS = {
-    manager: [['today', 'اليوم'], ['follow', 'المتابعة'], ['trips', 'الكشوف'], ['back', 'الإيصالات والمخزن'], ['locs', 'المواقع'],
+    manager: [['today', 'اليوم'], ['follow', 'المتابعة'], ['map', 'الخريطة'], ['trips', 'الكشوف'], ['back', 'الإيصالات والمخزن'], ['locs', 'المواقع'],
       ['reports', 'التقارير'], ['users', 'المستخدمون'], ['settings', 'الإعدادات'], ['audit', 'سجل التدقيق']],
-    supervisor: [['today', 'اليوم'], ['follow', 'المتابعة'], ['trips', 'الكشوف'], ['back', 'الإيصالات والمخزن'], ['locs', 'المواقع'], ['reports', 'التقارير']],
+    supervisor: [['today', 'اليوم'], ['follow', 'المتابعة'], ['map', 'الخريطة'], ['trips', 'الكشوف'], ['back', 'الإيصالات والمخزن'], ['locs', 'المواقع'], ['reports', 'التقارير']],
     accountant: [['follow', 'المتابعة'], ['reports', 'التقارير']],
-    storekeeper: [['back', 'الإيصالات والمخزن']],
+    storekeeper: [['back', 'الإيصالات والمخزن'], ['map', 'الخريطة']],
     rep: [['addloc', 'تسجيل موقع عميل']],
     driver: [['my', 'فواتيري'], ['mysum', 'ملخصي']]
   };
@@ -396,6 +396,7 @@
           box.filter(function (s) { return !s.final && s.kind; }).sort(function (a, b) { return a.seq - b.seq; }).forEach(function (s) { applyLocal(items, s); });
           st.drv = { items: items, at: RK.nowStr() };
           S.set('drv', st.drv);
+          trkSync();
           prefetchFacades(items);
           return st.drv;
         });
@@ -431,6 +432,7 @@
     }).then(function (saved) {
       applyLocal(st.drv.items, saved);
       S.set('drv', st.drv);
+      trkSync();
       render(); pendUI(); flushNow();
       return saved;
     });
@@ -442,6 +444,73 @@
     if (a.state === 'arrived') return { k: 'result', t: isRet(a) ? 'استلام المرتجع' : 'تسليم الفاتورة' };
     return null;
   }
+
+  /* ===================== التتبع المباشر: هاتف السائق يرسل موقعه أثناء الرحلة ===================== */
+  var TRK = { on: false, watch: null, buf: [], lastFix: null, lastKeep: 0, lastPost: 0, timer: null, wake: null, err: '', weak: false, every: 15, sentAt: '', sending: false };
+  function trkActive() { return (st.drv && st.drv.items || []).filter(function (a) { return a.trip_started && (a.state === 'on_way' || a.state === 'arrived'); }); }
+  function trkShould() { return !!(st.user && st.user.role === 'driver' && trkActive().length); }
+  function trkSync() { var want = trkShould(); if (want && !TRK.on) trkStart(); else if (!want && TRK.on) trkStop(); }
+  function trkStart() {
+    if (!navigator.geolocation) { TRK.err = 'unsupported'; return; }
+    TRK.on = true; TRK.err = '';
+    S.get('trk_buf').then(function (b) { if (b && b.length) TRK.buf = b.concat(TRK.buf).slice(-300); });
+    TRK.watch = navigator.geolocation.watchPosition(trkFix, function (e) { TRK.err = e.code === 1 ? 'denied' : 'weak'; trkUI(); },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+    TRK.timer = setInterval(trkSend, TRK.every * 1000);
+    trkWake(); trkUI();
+  }
+  function trkStop() {
+    TRK.on = false;
+    if (TRK.watch !== null) navigator.geolocation.clearWatch(TRK.watch);
+    TRK.watch = null; clearInterval(TRK.timer); trkSend();
+    if (TRK.wake) { TRK.wake.release().catch(function () {}); TRK.wake = null; }
+    trkUI();
+  }
+  function trkFix(p) {
+    var c = p.coords;
+    TRK.err = '';
+    if (c.accuracy > 120) { TRK.weak = true; trkUI(); return; }
+    TRK.weak = false;
+    var pt = { lat: +c.latitude.toFixed(6), lng: +c.longitude.toFixed(6), acc: Math.round(c.accuracy), t: RK.nowStr(),
+      spd: c.speed === null || c.speed === undefined || isNaN(c.speed) ? null : +c.speed.toFixed(1), hdg: c.heading === null || c.heading === undefined || isNaN(c.heading) ? null : Math.round(c.heading) };
+    var l = TRK.lastFix; TRK.lastFix = pt;
+    if (!l || distM(l.lat, l.lng, pt.lat, pt.lng) >= 15 || Date.now() - TRK.lastKeep > 60000) { TRK.buf.push(pt); TRK.lastKeep = Date.now(); }
+    if (!TRK.lastPost) trkSend();
+    trkUI();
+  }
+  function trkSend() {
+    if (!TRK.buf.length) {
+      if (TRK.on && TRK.lastFix && Date.now() - TRK.lastPost > 60000) TRK.buf.push(Object.assign({}, TRK.lastFix, { t: RK.nowStr() })); else return;
+    }
+    if (!navigator.onLine || TRK.sending) { S.set('trk_buf', TRK.buf.slice(-300)); return; }
+    var pts = TRK.buf.slice(0, 200), act = trkActive()[0];
+    TRK.sending = true;
+    RK.api('loc_ping', { pts: pts, trip_id: act ? act.trip_id : '' }, { timeout: 20000 }).then(function (r) {
+      if (r.ok) {
+        TRK.buf = TRK.buf.slice(pts.length); TRK.sentAt = RK.nowStr(); TRK.lastPost = Date.now();
+        if (r.every && r.every !== TRK.every && TRK.on) { TRK.every = r.every; clearInterval(TRK.timer); TRK.timer = setInterval(trkSend, TRK.every * 1000); }
+      }
+    }).catch(function () {}).then(function () { TRK.sending = false; S.set('trk_buf', TRK.buf.slice(-300)); trkUI(); });
+  }
+  // إبقاء الشاشة مضاءة أثناء الرحلة حتى لا يتوقف إرسال الموقع
+  function trkWake() {
+    if (!TRK.on || !('wakeLock' in navigator) || document.hidden || TRK.wake) return;
+    navigator.wakeLock.request('screen').then(function (l) { TRK.wake = l; l.addEventListener('release', function () { TRK.wake = null; }); }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && TRK.on) { trkWake(); trkSend(); } });
+  logoutHooks.push(function () { if (TRK.on) trkStop(); TRK.buf = []; });
+  function trkBarHTML() {
+    if (!trkShould()) return '';
+    return '<div class="trkbar" id="trkbar">' + trkBarInner() + '</div>';
+  }
+  function trkBarInner() {
+    if (TRK.err === 'denied') return '<span class="tdot bad"></span><div><b>الموقع مغلق</b><small>اسمح للتطبيق بالوصول إلى موقعك من إعدادات المتصفح، حتى يرى المشرف والعميل أين وصلت.</small></div>';
+    if (TRK.err === 'unsupported') return '<span class="tdot bad"></span><div><b>هاتفك لا يدعم تحديد الموقع</b></div>';
+    if (!TRK.lastFix || TRK.weak || TRK.err === 'weak') return '<span class="tdot warn"></span><div><b>جارٍ تحديد موقعك…</b><small>' + (TRK.weak ? 'إشارة GPS ضعيفة، اقترب من النافذة أو اخرج للطريق' : 'تأكد أن GPS مفتوح') + '</small></div>';
+    return '<span class="tdot ok"></span><div><b>التتبع المباشر يعمل</b><small>' + (TRK.sentAt ? 'آخر إرسال ' + TRK.sentAt.slice(11, 19) : 'جارٍ الإرسال…') + (TRK.buf.length > 3 ? ' · ' + TRK.buf.length + ' نقطة بانتظار الإنترنت' : '') +
+      ' · أبقِ التطبيق مفتوحاً' + (TRK.wake ? ' (الشاشة لن تنطفئ)' : ' ولا تقفل الشاشة') + '</small></div>';
+  }
+  function trkUI() { var b = q('#trkbar'); if (b) b.innerHTML = trkBarInner(); }
 
   var VIEWS = {};
   VIEWS.my = {
@@ -460,12 +529,14 @@
       });
       var open = items.filter(function (a) { return ['assigned', 'on_way', 'arrived'].indexOf(a.state) >= 0; });
       var doneToday = items.filter(function (a) { return ['assigned', 'on_way', 'arrived'].indexOf(a.state) < 0; });
+      h += trkBarHTML();
       h += '<div class="kpis"><div class="kpi"><span>بقي للتسليم</span><b>' + N(open.length) + '</b></div><div class="kpi"><span>انتهيت منها</span><b>' + N(doneToday.length) + '</b></div></div>';
       h += stopsHTML(open, true);
       if (doneToday.length) h += '<div class="sec-title"><h2>ما انتهيت منه</h2></div>' + stopsHTML(doneToday, false);
       return h;
     },
     bind: function (m) {
+      trkSync();
       qa('[data-start]', m).forEach(function (b) {
         b.onclick = function () {
           confirmBox('بدء الرحلة', 'ستصبح كل فواتير هذا الكشف «في الطريق». هل خرجت من المخزن والبضاعة معك؟', 'نعم، بدء الرحلة').then(function (y) {
@@ -948,6 +1019,8 @@
       if (['on_way', 'arrived', 'delivered', 'partial', 'failed', 'picked', 'closed'].indexOf(a.state) >= 0) acts += '<button class="btn sm ghost" data-undo>تراجع خطوة للخلف (بسبب)</button>';
       if (a.state !== 'canceled') acts += '<button class="btn sm ghost" data-rp>' + ICON.print + ' إعادة طباعة الإيصال</button>';
     }
+    if ((TABS[st.user.role] || []).some(function (t) { return t[0] === 'map'; }) && (['assigned', 'on_way', 'arrived'].indexOf(a.state) >= 0 || (a.start_at && String(a.start_at).slice(0, 10) === today())))
+      acts = '<div class="row"><button class="btn sm primary" data-onmap>' + ICON.pin + ' تتبع على الخريطة</button>' + (['assigned', 'on_way', 'arrived'].indexOf(a.state) >= 0 && canShareTrack() ? '<button class="btn sm" data-trklink>رابط تتبع للعميل</button>' : '') + '</div>' + acts;
     sheet((isRet(a) ? 'مرتجع ' : 'فاتورة ') + a.inv_number + ' · إيصال ' + a.rec,
       '<div class="row"><b class="grow">' + esc(a.cust_name) + '</b>' + badge(a.state, a.state_ar) + '</div>' +
       (a.siraj ? '<div class="msg err">' + esc(a.siraj) + ' بعد تعيينها. راجع الفاتورة في سراج قبل أي قرار.</div>' : '') +
@@ -998,8 +1071,170 @@
         };
         var rp = q('[data-rp]', s.el);
         if (rp) rp.onclick = function () { printTrip(a.trip_id, a.rec); };
+        var om = q('[data-onmap]', s.el); if (om) om.onclick = function () { s.close(); openOnMap(a); };
+        var tlk = q('[data-trklink]', s.el); if (tlk) tlk.onclick = function () { shareTrack(a.rec); };
       });
   }
+
+  /* ===================== خريطة التتبع المباشر (المدير والمشرف وأمين المخزن) ===================== */
+  var MV = { map: null, el: null, data: null, markers: {}, sel: null, focusRec: null, layer: null, timer: null, day: null, fitted: false, routeAt: 0, routeKey: '', route: null, err: '' };
+  var DONE_ST = { delivered: 1, partial: 1, picked: 1, closed: 1, to_store: 1 };
+  function mvAge(d) { var t = d.pos && d.pos.t ? parseTs(d.pos.t) : 0, a = d.at ? parseTs(d.at) : t; return a ? (Date.now() - a) / 60000 : 1e9; }
+  function mvStatus(d) {
+    if (!d.pos) return 'none';
+    var age = mvAge(d), stale = (MV.data && MV.data.stale_min) || 30;
+    if (!MV.data.today || age > stale) return 'off';
+    if (age > 3) return 'idle';
+    return d.pos.spd !== null && d.pos.spd !== undefined && d.pos.spd < 0.8 ? 'idle' : 'live';
+  }
+  function mvNext(d) { return d.stops.filter(function (s) { return s.state === 'on_way' || s.state === 'assigned' || s.state === 'arrived'; })[0] || null; }
+  function mvStatusText(d) {
+    var s = mvStatus(d);
+    if (s === 'none') return d.stops.some(function (x) { return x.start_at; }) ? 'لم يرسل موقعاً بعد' : 'لم يبدأ الرحلة';
+    if (s === 'off') return 'آخر موقع ' + hm(d.at || d.pos.t);
+    if (s === 'idle') return 'متوقف' + (mvAge(d) > 3 ? ' · آخر تحديث ' + hm(d.at) : '');
+    return 'يتحرك' + (d.pos.spd ? ' · ' + Math.round(d.pos.spd * 3.6) + ' كم/س' : '');
+  }
+  VIEWS.map = {
+    load: function () { return Promise.resolve(false); },
+    html: function () {
+      return '<div class="mapwrap" id="mapwrap"><div id="lmap" class="lmap"></div><div class="mpanel" id="mpanel"><div class="loading"><span class="spin"></span> جارٍ تحميل الخريطة…</div></div></div>';
+    },
+    bind: function (m) {
+      var hd = q('header.top'), pb = q('#pb');
+      if (hd) document.documentElement.style.setProperty('--hdr', (hd.offsetHeight + (pb && !pb.hidden ? pb.offsetHeight : 0)) + 'px');
+      RKMap.load().then(function () {
+        if (MV.map) { MV.map.remove(); MV.map = null; }
+        MV.el = q('#lmap', m); MV.map = RKMap.create(MV.el); MV.markers = {}; MV.layer = L.layerGroup().addTo(MV.map); MV.fitted = false; MV.route = null; MV.routeKey = '';
+        MV.map.on('click', function () { if (MV.sel && !MV.focusRec) { MV.sel = null; mvDraw(); } });
+        setTimeout(function () { if (MV.map) MV.map.invalidateSize(); }, 200);
+        mvTick();
+      }).catch(function (e) { var p = q('#mpanel', m); if (p) p.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+    }
+  };
+  function mvTick() {
+    clearTimeout(MV.timer);
+    if (st.tab !== 'map' || !MV.map || !document.body.contains(MV.el)) return;
+    call('track', { date: MV.day || undefined, full: MV.day ? 1 : undefined }).then(function (r) {
+      if (st.tab !== 'map' || !document.body.contains(MV.el)) return;
+      MV.data = r; MV.err = ''; mvDraw();
+      if (r.today && !document.hidden) MV.timer = setTimeout(mvTick, (r.every || 15) * 1000);
+    }).catch(function (e) { MV.err = e.message; mvPanel(); MV.timer = setTimeout(mvTick, 30000); });
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && st.tab === 'map' && MV.map) mvTick(); });
+  function mvDraw() {
+    var D = MV.data, map = MV.map;
+    if (!D || !map) return;
+    var seen = {};
+    D.drivers.forEach(function (d) {
+      if (!d.pos) return;
+      seen[d.id] = 1;
+      var stt = mvStatus(d), tr = d.trail || [], hdg = d.pos.hdg;
+      if ((hdg === null || hdg === undefined) && tr.length > 1) { var a = tr[tr.length - 2], b = tr[tr.length - 1]; hdg = RKMap.bearing(a[0], a[1], b[0], b[1]); }
+      var icon = RKMap.truckIcon({ status: stt, heading: hdg, label: d.name, selected: MV.sel === d.id });
+      var mk = MV.markers[d.id];
+      if (!mk) { mk = MV.markers[d.id] = L.marker([d.pos.lat, d.pos.lng], { icon: icon, zIndexOffset: 1000 }).addTo(map); mk.on('click', function (e) { L.DomEvent.stopPropagation(e); MV.sel = d.id; MV.focusRec = null; MV.fitted = false; mvDraw(); }); }
+      else { mk.setIcon(icon); RKMap.animate(mk, [d.pos.lat, d.pos.lng], 1500); }
+      mk.setZIndexOffset(MV.sel === d.id ? 2000 : 1000);
+    });
+    Object.keys(MV.markers).forEach(function (id) { if (!seen[id]) { map.removeLayer(MV.markers[id]); delete MV.markers[id]; } });
+    MV.layer.clearLayers();
+    var sel = MV.sel && D.drivers.filter(function (d) { return d.id === MV.sel; })[0], fit = [];
+    if (sel) {
+      var tr2 = (sel.trail || []).map(function (p) { return [p[0], p[1]]; });
+      if (tr2.length > 1) L.polyline(tr2, { color: '#7E9CC6', weight: 5, opacity: .85, lineCap: 'round', lineJoin: 'round' }).addTo(MV.layer);
+      var nx = mvNext(sel), seenC = {};
+      sel.stops.forEach(function (s) {
+        var ll = s.loc ? [s.loc.lat, s.loc.lng] : s.alat ? [s.alat, s.alng] : null;
+        if (!ll || seenC[s.cust_id]) return;
+        seenC[s.cust_id] = 1;
+        var kind = DONE_ST[s.state] ? 'done' : s.state === 'failed' ? 'bad' : nx && nx.cust_id === s.cust_id ? 'next' : 'wait';
+        var m = L.marker(ll, { icon: RKMap.stopIcon(s.stop || '•', kind, kind === 'next' || s.rec === MV.focusRec), zIndexOffset: kind === 'next' ? 900 : 500 }).addTo(MV.layer);
+        m.bindTooltip(esc(s.cust) + ' · ' + esc(s.state_ar), { direction: 'top', offset: [0, -30] });
+        fit.push(ll);
+      });
+      if (sel.pos) fit.push([sel.pos.lat, sel.pos.lng]);
+      // خط الطريق إلى المحطة التالية والوقت المتوقع
+      if (sel.pos && nx && nx.loc && D.today && mvStatus(sel) !== 'off') {
+        var key = sel.id + nx.cust_id;
+        if (key !== MV.routeKey || Date.now() - MV.routeAt > 45000) {
+          MV.routeKey = key; MV.routeAt = Date.now();
+          RKMap.route([sel.pos.lat, sel.pos.lng], [nx.loc.lat, nx.loc.lng]).then(function (r) { MV.route = r; mvDraw(); });
+        }
+        if (MV.route && MV.routeKey === key) L.polyline(MV.route.line, { color: '#0C4CA2', weight: 6, opacity: .9, dashArray: MV.route.approx ? '8 10' : null, lineCap: 'round' }).addTo(MV.layer);
+      } else MV.route = null;
+    } else D.drivers.forEach(function (d) { if (d.pos) fit.push([d.pos.lat, d.pos.lng]); });
+    mvPanel();
+    if (!MV.fitted && fit.length) {
+      // نترك مكان لوحة السائقين حتى لا تغطي السيارة أو المحلات
+      var pn = q('#mpanel'), phone = window.innerWidth <= 760, pw = pn ? pn.offsetWidth : 0, ph = pn ? pn.offsetHeight : 0;
+      var o = phone ? { paddingTopLeft: [30, 30], paddingBottomRight: [30, ph + 20], maxZoom: 15 } : { paddingTopLeft: [pw + 40, 40], paddingBottomRight: [40, 40], maxZoom: 15 };
+      if (fit.length === 1) map.setView(fit[0], 14); else map.fitBounds(fit, o);
+      MV.fitted = true;
+    }
+  }
+  function mvPanel() {
+    var p = q('#mpanel'), D = MV.data;
+    if (!p) return;
+    var head = '<div class="mp-head"><b class="grow">' + (MV.sel ? '' : 'السائقون على الخريطة') + '</b><input type="date" class="input mp-day num" id="mvday" value="' + esc(MV.day || today()) + '" max="' + today() + '" aria-label="اليوم"></div>';
+    if (MV.err && !D) { p.innerHTML = head + '<div class="msg err">' + esc(MV.err) + '</div>'; mvBindPanel(p); return; }
+    if (!D) return;
+    var sel = MV.sel && D.drivers.filter(function (d) { return d.id === MV.sel; })[0];
+    if (sel) {
+      var nx = mvNext(sel), done = sel.stops.filter(function (s) { return DONE_ST[s.state]; }).length, stt = mvStatus(sel);
+      p.innerHTML = '<div class="mp-head"><button class="iconbtn" data-mvback aria-label="كل السائقين">→</button><div class="grow"><b>' + esc(sel.name) + '</b><div class="small muted">' + esc(sel.truck) + '</div></div>' +
+        (sel.phone ? '<a class="btn sm ghost" href="tel:' + esc(sel.phone) + '">اتصال</a>' : '') + '</div>' +
+        '<div class="mp-stat"><span class="sdot s-' + stt + '"></span><span>' + esc(mvStatusText(sel)) + '</span><span class="muted">· سلّم ' + N(done) + ' من ' + N(sel.stops.length) + '</span></div>' +
+        (nx ? '<div class="mp-next"><div class="small muted">المحطة التالية</div><b>' + esc(nx.cust) + '</b>' +
+          (MV.route && D.today && stt !== 'off' ? '<div class="mp-eta">' + esc(RKMap.etaText(MV.route.sec)) + ' <span>' + (MV.route.approx ? 'تقريباً · ' : '') + esc(RKMap.kmText(MV.route.m)) + '</span></div>' : nx.loc ? '' : '<div class="small muted">لا يوجد موقع معتمد لهذا المحل</div>') + '</div>' : '') +
+        '<div class="mp-stops">' + sel.stops.map(function (s) {
+          var kind = DONE_ST[s.state] ? 'done' : s.state === 'failed' ? 'bad' : nx && nx.cust_id === s.cust_id ? 'next' : 'wait';
+          return '<div class="mp-s' + (s.rec === MV.focusRec ? ' foc' : '') + '" data-mvs="' + esc(s.rec) + '"><span class="mp-n k-' + kind + '">' + N(s.stop || '•') + '</span><div class="grow"><b>' + esc(s.cust) + '</b>' +
+            '<div class="small muted">' + (s.kind === 'مرتجع مبيع' ? 'مرتجع ' : 'فاتورة ') + N(s.inv) + ' · ' + esc(s.state_ar) + (s.result_at ? ' ' + hm(s.result_at) : s.arrive_at ? ' ' + hm(s.arrive_at) : '') + '</div></div>' +
+            (D.today && !DONE_ST[s.state] && s.state !== 'failed' && canShareTrack() ? '<button class="iconbtn mp-sh" data-share="' + esc(s.rec) + '" title="رابط تتبع للعميل" aria-label="رابط تتبع للعميل"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>' : '') + '</div>';
+        }).join('') + '</div>';
+    } else {
+      var list = D.drivers.slice().sort(function (a, b) { var o = { live: 0, idle: 1, off: 2, none: 3 }; return o[mvStatus(a)] - o[mvStatus(b)]; });
+      p.innerHTML = head + (list.length ? '<div class="mp-list">' + list.map(function (d) {
+        var stt = mvStatus(d), done = d.stops.filter(function (s) { return DONE_ST[s.state]; }).length, nx = mvNext(d);
+        return '<button class="mp-d" data-mvd="' + esc(d.id) + '"><span class="sdot s-' + stt + '"></span><div class="grow"><b>' + esc(d.name) + '</b><div class="small muted">' + esc(mvStatusText(d)) + '</div>' +
+          (nx ? '<div class="small">التالي: ' + esc(nx.cust) + '</div>' : '') + '</div><span class="mp-prog">' + N(done) + '/' + N(d.stops.length) + '</span></button>';
+      }).join('') + '</div>' : '<div class="msg info">لا يوجد سائقون في رحلات ' + (D.today ? 'الآن' : 'في هذا اليوم') + '. يظهر السائق هنا عند ضغط «بدء الرحلة» في هاتفه.</div>') +
+        '<div class="mp-legend small muted"><span><i class="sdot s-live"></i>يتحرك</span><span><i class="sdot s-idle"></i>متوقف</span><span><i class="sdot s-off"></i>غير متصل</span></div>';
+    }
+    mvBindPanel(p);
+  }
+  function mvBindPanel(p) {
+    var dy = q('#mvday', p);
+    if (dy) dy.onchange = function () { MV.day = dy.value && dy.value !== today() ? dy.value : null; MV.sel = null; MV.fitted = false; mvTick(); };
+    var bk = q('[data-mvback]', p); if (bk) bk.onclick = function () { MV.sel = null; MV.focusRec = null; MV.fitted = false; mvDraw(); };
+    qa('[data-mvd]', p).forEach(function (b) { b.onclick = function () { MV.sel = b.dataset.mvd; MV.focusRec = null; MV.fitted = false; mvDraw(); }; });
+    qa('[data-mvs]', p).forEach(function (b) {
+      b.onclick = function (e) {
+        if (e.target.closest('[data-share]')) return;
+        var d = MV.data.drivers.filter(function (x) { return x.id === MV.sel; })[0], s = d && d.stops.filter(function (x) { return x.rec === b.dataset.mvs; })[0];
+        var ll = s && (s.loc ? [s.loc.lat, s.loc.lng] : s.alat ? [s.alat, s.alng] : null);
+        MV.focusRec = s ? s.rec : null; if (ll) MV.map.setView(ll, 16); mvDraw();
+      };
+    });
+    qa('[data-share]', p).forEach(function (b) { b.onclick = function () { shareTrack(b.dataset.share); }; });
+  }
+  function canShareTrack() { return st.user && ['manager', 'supervisor', 'storekeeper'].indexOf(st.user.role) >= 0; }
+  // رابط تتبع يُرسل للعميل (واتساب أو أي تطبيق)
+  function shareTrack(rec) {
+    call('track_link', { rec: rec }).then(function (r) {
+      var url = new URL('track.html?t=' + encodeURIComponent(r.token), location.href).href;
+      var text = 'راكان: تابع وصول طلبيتك على الخريطة مباشرة';
+      sheet('رابط تتبع للعميل', '<p style="margin:0">أرسل هذا الرابط للعميل ليرى السائق على الخريطة والوقت المتوقع للوصول. لا يظهر فيه أي مبلغ، وينتهي بعد 3 أيام.</p>' +
+        '<input class="input ltr" readonly value="' + esc(url) + '" id="trku">' +
+        '<div class="row"><a class="btn primary grow" target="_blank" rel="noopener" href="https://wa.me/?text=' + encodeURIComponent(text + '\n' + url) + '">واتساب</a>' +
+        (navigator.share ? '<button class="btn grow" data-sh>مشاركة</button>' : '') + '<button class="btn ghost" data-cp>نسخ</button><a class="btn ghost" target="_blank" rel="noopener" href="' + esc(url) + '">فتح</a></div>', function (s) {
+        var sh = q('[data-sh]', s.el); if (sh) sh.onclick = function () { navigator.share({ title: 'تتبع طلبيتك', text: text, url: url }).catch(function () {}); };
+        q('[data-cp]', s.el).onclick = function () { var i = q('#trku', s.el); i.select(); (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(function () { toast('نُسخ الرابط'); }).catch(function () { document.execCommand('copy'); toast('نُسخ الرابط'); }); };
+      });
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  function openOnMap(a) { MV.sel = a.driver_id; MV.focusRec = a.rec; MV.fitted = false; MV.day = null; st.tab = 'map'; render(); }
 
   /* ===================== الكشوف والطباعة ===================== */
   VIEWS.trips = {
