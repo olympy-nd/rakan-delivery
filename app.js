@@ -1429,10 +1429,29 @@
 
   /* ===================== مواقع العملاء ===================== */
   VIEWS.locs = {
-    load: function () { return call('locs_list').then(function (r) { st.locs = r.locs; }); },
+    load: function () {
+      if (st.locsTab === 'ok') return call('locs_approved').then(function (r) { st.locsOk = r.locs; });
+      return call('locs_list').then(function (r) { st.locs = r.locs; });
+    },
     html: function () {
-      if (!st.locs) return '<div class="loading"><span class="spin"></span></div>';
-      var h = '<div class="row"><button class="btn primary" data-add>' + ICON.pin + ' تسجيل موقع عميل</button></div>';
+      var tab = st.locsTab || 'new';
+      var h = '<div class="row" style="flex-wrap:wrap"><div class="chips grow"><button class="chip' + (tab === 'new' ? ' on' : '') + '" data-ltab="new">بانتظار الاعتماد' + (st.locs && st.locs.length ? ' <small>' + N(st.locs.length) + '</small>' : '') + '</button>' +
+        '<button class="chip' + (tab === 'ok' ? ' on' : '') + '" data-ltab="ok">المواقع المعتمدة' + (st.locsOk ? ' <small>' + N(st.locsOk.length) + '</small>' : '') + '</button></div>' +
+        (tab === 'ok' ? '<button class="btn" data-man>' + ICON.pin + ' إضافة موقع من الخريطة</button>' : '<button class="btn primary" data-add>' + ICON.pin + ' تسجيل موقع عميل</button>') + '</div>';
+      if (tab === 'ok') {
+        if (!st.locsOk) return h + '<div class="loading"><span class="spin"></span></div>';
+        if (!st.locsOk.length) return h + '<div class="card empty">لا توجد مواقع معتمدة بعد</div>';
+        var t = (st.locsQ || '').trim();
+        var list = st.locsOk.filter(function (l) { return !t || String(l.cust_name).indexOf(t) >= 0 || String(l.branch).indexOf(t) >= 0; });
+        return h + '<div class="field"><input id="lq" class="input" type="search" placeholder="بحث باسم العميل" value="' + esc(t) + '"></div><div class="list" id="lok">' + list.map(function (l) {
+          return '<div class="card"><div class="row"><b class="grow">' + esc(l.cust_name) + (l.branch ? ' · ' + esc(l.branch) : '') + '</b><span class="badge b-delivered">معتمد</span></div>' +
+            '<div class="small muted">' + (l.decided_by ? 'اعتمده ' + esc(l.decided_by) + ' · ' + N(String(l.decided_at).slice(0, 16)) : 'سجّله ' + esc(l.by_name)) + (l.note ? ' · ' + esc(l.note) : '') + '</div>' +
+            (l.desc ? '<p style="margin:6px 0">' + esc(l.desc) + '</p>' : '') +
+            '<div class="row" style="margin-top:8px"><a class="btn sm ghost" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + l.lat + ',' + l.lng + '">' + ICON.pin + ' على الخريطة</a>' +
+            '<button class="btn sm primary" data-edit="' + esc(l.id) + '">تعديل الموقع</button><button class="btn sm danger" data-del="' + esc(l.id) + '">حذف</button></div></div>';
+        }).join('') + (list.length ? '' : '<div class="card empty">لا نتائج</div>') + '</div>';
+      }
+      if (!st.locs) return h + '<div class="loading"><span class="spin"></span></div>';
       if (!st.locs.length) return h + '<div class="card empty">لا توجد مواقع بانتظار الاعتماد</div>';
       return h + '<div class="list">' + st.locs.map(function (l) {
         var d = l.approved ? Math.round(distM(l.lat, l.lng, l.approved.lat, l.approved.lng)) : null;
@@ -1448,12 +1467,127 @@
     },
     bind: function (m) {
       loadPhotos(m);
+      qa('[data-ltab]', m).forEach(function (b) {
+        b.onclick = function () {
+          st.locsTab = b.dataset.ltab; render();
+          VIEWS.locs.load().then(render).catch(function (e) { toast(e.message, true); });
+        };
+      });
       var add = q('[data-add]', m);
       if (add) add.onclick = function () { openAddLoc(); };
+      var man = q('[data-man]', m);
+      if (man) man.onclick = function () { openLocEdit(null); };
+      var lq = q('#lq', m);
+      if (lq) lq.oninput = function () {
+        st.locsQ = lq.value; var pos = lq.selectionStart; render();
+        var n = q('#lq'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} }
+      };
+      qa('[data-edit]', m).forEach(function (b) { b.onclick = function () { openLocEdit((st.locsOk || []).filter(function (l) { return l.id === b.dataset.edit; })[0]); }; });
+      qa('[data-del]', m).forEach(function (b) {
+        b.onclick = function () {
+          var l = (st.locsOk || []).filter(function (x) { return x.id === b.dataset.del; })[0];
+          askReason('حذف موقع ' + l.cust_name, 'سبب الحذف', { intro: 'يُحذف الموقع المعتمد ويُحفظ في السجل. سيظهر العميل «بلا موقع» حتى يُسجَّل له موقع جديد.', ok: 'حذف الموقع' }).then(function (r) {
+            if (r) call('loc_remove', { id: l.id, reason: r }).then(function () { toast('حُذف الموقع'); return VIEWS.locs.load(); }).then(render).catch(function (e) { toast(e.message, true); });
+          });
+        };
+      });
       qa('[data-ap]', m).forEach(function (b) { b.onclick = function () { call('loc_decide', { id: b.dataset.ap, approve: true }).then(function () { toast('اعتُمد الموقع'); return VIEWS.locs.load(); }).then(render).catch(function (e) { toast(e.message, true); }); }; });
       qa('[data-rj]', m).forEach(function (b) { b.onclick = function () { askReason('رفض الموقع', 'سبب الرفض').then(function (r) { if (r) call('loc_decide', { id: b.dataset.rj, reason: r }).then(VIEWS.locs.load).then(render).catch(function (e) { toast(e.message, true); }); }); }; });
     }
   };
+
+  // قراءة إحداثيات من نص: «32.88, 13.19» أو رابط خرائط Google (…@32.88,13.19… أو ?q=32.88,13.19)
+  function parseLatLng(t) {
+    var m = String(t || '').match(/(-?\d{1,2}\.\d+)\s*[,،\s]\s*(-?\d{1,3}\.\d+)/);
+    if (!m) return null;
+    var la = Number(m[1]), lo = Number(m[2]);
+    return Math.abs(la) <= 90 && Math.abs(lo) <= 180 ? { lat: +la.toFixed(6), lng: +lo.toFixed(6) } : null;
+  }
+
+  // تعديل موقع معتمد (l) أو إضافة موقع لعميل من الخريطة (l = null): اسحب الدبوس أو اضغط على الخريطة
+  function openLocEdit(l) {
+    var cust = null, pos = l ? { lat: l.lat, lng: l.lng } : null, map = null, pin = null, acc = '';
+    var s = sheet(l ? 'تعديل موقع ' + l.cust_name + (l.branch ? ' · ' + l.branch : '') : 'إضافة موقع عميل من الخريطة',
+      (l ? '' : '<div class="field"><label for="ec">العميل</label><input id="ec" class="input" placeholder="اكتب جزءاً من اسم العميل" autocomplete="off"><div id="ecl" class="list"></div></div>' +
+        '<div class="field"><label for="eb">الفرع (إن كان للعميل أكثر من فرع)</label><input id="eb" class="input"></div>') +
+      '<div class="msg info">اسحب الدبوس إلى باب المحل، أو اضغط على مكانه في الخريطة.' + (l && l.history.length ? ' النقاط الرمادية مواقع وصول السائقين سابقاً، اضغط على أي منها لنقل الدبوس إليها.' : '') + '</div>' +
+      '<div id="emap" class="emap"></div>' +
+      '<div class="row" style="margin-top:8px"><button class="btn sm" data-me>' + ICON.pin + ' موقعي الحالي</button>' +
+      '<input id="ell" class="input grow" dir="ltr" placeholder="32.8872, 13.1913 أو رابط خرائط Google" style="min-width:0"></div>' +
+      '<div id="emv" class="small muted" style="margin-top:6px"></div>' +
+      '<div class="field"><label for="ed">وصف مختصر</label><input id="ed" class="input" placeholder="مثل: بجانب المسجد، الباب الأزرق" value="' + esc(l ? l.desc : '') + '"></div>' +
+      (l ? '<div class="field"><label for="er">سبب التعديل</label><input id="er" class="input" placeholder="مثل: الموقع السابق غير دقيق، المحل انتقل"></div>' : '') +
+      '<div id="ee"></div><button class="btn accent big" data-save disabled>' + (l ? 'حفظ الموقع الجديد' : 'حفظ واعتماد الموقع') + '</button>', function (s) {
+        s.sticky = true;
+        var ell = q('#ell', s.el), emv = q('#emv', s.el), save = q('[data-save]', s.el);
+        function check() {
+          save.disabled = !(pos && (l || cust));
+          if (!pos) { emv.textContent = 'حدّد الموقع على الخريطة'; return; }
+          ell.value = pos.lat + ', ' + pos.lng;
+          if (!l && cust && cust.has_loc) { emv.innerHTML = '<span style="color:var(--warn,#B45309)">لهذا العميل موقع معتمد، والحفظ يستبدله (يبقى القديم في السجل).</span> الموقع: ' + N(pos.lat + ', ' + pos.lng); return; }
+          emv.innerHTML = l ? (function (d) { return d < 3 ? 'لم يتغيّر الموقع بعد' : 'سيُنقل الموقع <b>' + N(num(d)) + ' م</b> عن الموقع الحالي'; })(Math.round(distM(l.lat, l.lng, pos.lat, pos.lng))) : 'الموقع: ' + N(pos.lat + ', ' + pos.lng);
+        }
+        function place(p, fly) {
+          pos = { lat: +Number(p.lat).toFixed(6), lng: +Number(p.lng).toFixed(6) };
+          if (map) {
+            if (!pin) {
+              pin = L.marker([pos.lat, pos.lng], { draggable: true, icon: RKMap.shopIcon(), zIndexOffset: 1000, autoPan: true }).addTo(map);
+              pin.on('dragend', function () { var ll = pin.getLatLng(); acc = ''; place({ lat: ll.lat, lng: ll.lng }); });
+            } else pin.setLatLng([pos.lat, pos.lng]);
+            if (fly) map.setView([pos.lat, pos.lng], Math.max(map.getZoom(), 17));
+          }
+          check();
+        }
+        RKMap.load().then(function () {
+          map = RKMap.create(q('#emap', s.el), l ? { center: [l.lat, l.lng], zoom: 18 } : {});
+          setTimeout(function () { map.invalidateSize(); }, 60);
+          if (l) {
+            L.circleMarker([l.lat, l.lng], { radius: 6, color: '#0C4CA2', weight: 2, fillOpacity: .15, dashArray: '3 3' }).addTo(map).bindTooltip('الموقع الحالي');
+            (l.history || []).forEach(function (h) {
+              L.circleMarker([h.lat, h.lng], { radius: 7, color: '#6B7280', weight: 1, fillColor: '#9CA3AF', fillOpacity: .9 }).addTo(map)
+                .bindTooltip('وصول سائق ' + N(String(h.at || '').slice(0, 10))).on('click', function () { acc = ''; place(h); });
+            });
+            place(pos);
+          } else getPos({ timeout: 8000 }).then(function (p) { if (p && !pos) { acc = p.acc; place(p, true); } });
+          map.on('click', function (e) { acc = ''; place({ lat: e.latlng.lat, lng: e.latlng.lng }); });
+        }).catch(function (e) { q('#emap', s.el).innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+        q('[data-me]', s.el).onclick = function () {
+          var b = this; busy(b, true);
+          getPos({ maxAge: 0 }).then(function (p) {
+            busy(b, false);
+            if (!p) { toast('تعذّر تحديد موقعك. فعّل GPS وامنح الإذن', true); return; }
+            acc = p.acc; place(p, true); toast('دقة موقعك ±' + p.acc + ' م');
+          });
+        };
+        ell.onchange = function () { var p = parseLatLng(ell.value); if (p) { acc = ''; place(p, true); } else toast('لم أجد إحداثيات في النص', true); };
+        if (!l) {
+          var ec = q('#ec', s.el), ecl = q('#ecl', s.el);
+          var search = function () {
+            var t = ec.value.trim();
+            if (cust && t === cust.name) { ecl.innerHTML = ''; return; }
+            var list = (st.customers || []).filter(function (c) { return !t || c.name.indexOf(t) >= 0; })
+              .sort(function (a, b) { return (a.has_loc ? 1 : 0) - (b.has_loc ? 1 : 0); }).slice(0, 8);
+            ecl.innerHTML = list.map(function (c) { return '<button class="item tap" data-c="' + esc(c.id) + '" style="text-align:start"><div class="main"><b>' + esc(c.name) + '</b><div class="meta">' + (c.has_loc ? '<span class="badge b-delivered">له موقع معتمد</span>' : '<span class="badge">بلا موقع</span>') + '</div></div></button>'; }).join('');
+            qa('[data-c]', ecl).forEach(function (b) { b.onclick = function () { cust = (st.customers || []).filter(function (c) { return c.id === b.dataset.c; })[0]; ec.value = cust.name; ecl.innerHTML = ''; check(); }; });
+          };
+          ec.oninput = function () { cust = null; search(); check(); };
+          ec.onfocus = search;
+          loadCustomers().catch(function () {});
+        }
+        check();
+        save.onclick = function () {
+          var body = { lat: pos.lat, lng: pos.lng, acc: acc, desc: q('#ed', s.el).value.trim() };
+          if (l) { body.id = l.id; body.reason = q('#er', s.el).value.trim(); if (!body.reason) { q('#er', s.el).focus(); toast('اكتب سبب التعديل', true); return; } }
+          else { body.cust_id = cust.id; body.branch = q('#eb', s.el).value.trim(); }
+          busy(save, true);
+          call('loc_set', body).then(function () {
+            s.close(); toast(l ? 'حُفظ الموقع الجديد' : 'حُفظ موقع ' + cust.name);
+            loadCustomers().catch(function () {});
+            st.locsTab = 'ok'; return VIEWS.locs.load();
+          }).then(render).catch(function (e) { busy(save, false); q('#ee', s.el).innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; });
+        };
+      });
+  }
 
   VIEWS.addloc = {
     load: function () { return loadCustomers(); },

@@ -296,3 +296,6 @@ main:has(.mapwrap) { max-width: none; padding: 0; }
   .leaflet-bottom.leaflet-left { bottom: 46%; }
 }
 .mp-sh { width: 36px; height: 36px; color: var(--blue); } .mp-sh svg { width: 18px; height: 18px; }
+/* تعديل موقع العميل على الخريطة */
+.emap { height: 46vh; min-height: 260px; max-height: 420px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); margin-top: 10px; background: #e8eef5; }
+.emap .leaflet-marker-draggable { cursor: grab; }
