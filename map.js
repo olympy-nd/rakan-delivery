@@ -20,9 +20,20 @@
     opts = opts || {};
     var map = L.map(el, { zoomControl: false, attributionControl: true, center: opts.center || LIBYA, zoom: opts.zoom || 6, tap: true });
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd', maxZoom: 19, attribution: '© OpenStreetMap · © CARTO'
-    }).addTo(map);
+    // خرائط OpenStreetMap المجانية (لا تحتاج مفتاحاً). إن تعذّر تحميلها نتحوّل تلقائياً إلى خرائط Esri.
+    var TILES = [
+      ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }],
+      ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: '© Esri · OpenStreetMap' }]
+    ];
+    function useTiles(i) {
+      var ok = 0, bad = 0, layer = L.tileLayer(TILES[i][0], TILES[i][1]);
+      layer.on('tileload', function () { ok++; });
+      layer.on('tileerror', function () {
+        if (++bad >= 4 && !ok && i + 1 < TILES.length) { map.removeLayer(layer); useTiles(i + 1); }
+      });
+      layer.addTo(map);
+    }
+    useTiles(0);
     map.attributionControl.setPrefix(false);
     return map;
   }
