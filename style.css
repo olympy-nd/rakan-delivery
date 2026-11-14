@@ -299,3 +299,6 @@ main:has(.mapwrap) { max-width: none; padding: 0; }
 /* تعديل موقع العميل على الخريطة */
 .emap { height: 46vh; min-height: 260px; max-height: 420px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); margin-top: 10px; background: #e8eef5; }
 .emap .leaflet-marker-draggable { cursor: grab; }
+/* شارة الفرع (عند قراءة أكثر من قاعدة سراج) */
+.badge.b-br { background: #E8F0FB; color: #0C4CA2; }
+.badge.b-br.alt { background: #FFF1E6; color: #B4530F; }

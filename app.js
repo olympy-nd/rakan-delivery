@@ -776,6 +776,11 @@
     set('locs', (b.alerts.filter(function (a) { return a.kind === 'locs'; })[0] || {}).text ? Number(String(b.alerts.filter(function (a) { return a.kind === 'locs'; })[0].text).split(' ')[0]) : 0);
   }
 
+  // الفروع: تظهر الشارة والفلتر فقط إذا كان الوكيل يقرأ أكثر من قاعدة
+  function multiBr(b) { return !!(b && b.branches && b.branches.length > 1); }
+  function brName(b, code) { var x = ((b && b.branches) || []).filter(function (y) { return y.code === (code || ''); })[0]; return x ? x.name : (code || ''); }
+  function brBadge(b, code) { return multiBr(b) ? '<span class="badge b-br' + (code ? ' alt' : '') + '">' + esc(brName(b, code)) + '</span>' : ''; }
+
   function regionName(id) { var r = (st.board && st.board.regions || []).filter(function (x) { return x.id === id; })[0]; return r ? r.name : id; }
 
   VIEWS.today = {
@@ -823,11 +828,13 @@
             (n ? ' <small>· معه ' + n + '</small>' : '') + (sug === d.id ? ' <small>★ آخر من ذهب لهذا العميل</small>' : '') + '</button>';
         }).join('') + '</div>' : '<div class="msg warn">لا يوجد سائقون في هذه المنطقة. ' + (st.user.role === 'manager' ? 'أضفهم من «المستخدمون».' : 'اطلب من المدير إضافتهم.') + '</div>') + '</div>';
         h += '<div class="row"><input class="input grow" id="fq" placeholder="بحث برقم الفاتورة أو اسم العميل" value="' + esc(st.q) + '"><div class="chips">' +
-          [['all', 'الكل'], ['sale', 'مبيع'], ['ret', 'مرتجع']].map(function (k) { return '<button class="chip' + (st.kindF === k[0] ? ' on' : '') + '" data-kf="' + k[0] + '">' + k[1] + '</button>'; }).join('') + '</div></div>';
+          [['all', 'الكل'], ['sale', 'مبيع'], ['ret', 'مرتجع']].map(function (k) { return '<button class="chip' + (st.kindF === k[0] ? ' on' : '') + '" data-kf="' + k[0] + '">' + k[1] + '</button>'; }).join('') + '</div>' +
+          (multiBr(b) ? '<div class="chips">' + [{ code: '*', name: 'كل الفروع' }].concat(b.branches).map(function (x) { return '<button class="chip' + ((st.brF || '*') === x.code ? ' on' : '') + '" data-brf="' + esc(x.code) + '">' + esc(x.name) + '</button>'; }).join('') + '</div>' : '') + '</div>';
       }
       var shown = pend.filter(function (p) {
         if (st.kindF === 'sale' && p.kind === 'مرتجع مبيع') return false;
         if (st.kindF === 'ret' && p.kind !== 'مرتجع مبيع') return false;
+        if (multiBr(b) && st.brF && st.brF !== '*' && (p.src || '') !== st.brF) return false;
         return !st.q || (p.number + ' ' + p.cust_name).indexOf(st.q) >= 0;
       });
       if (!shown.length) h += '<div class="card empty">' + (pend.length ? 'لا نتائج للبحث' : 'لا توجد فواتير بانتظار التعيين. الفواتير الجديدة من سراج تظهر هنا خلال دقيقة تقريباً.') + '</div>';
@@ -840,7 +847,7 @@
           return g.map(function (p) {
             return '<label class="item tap' + (st.sel[p.id] ? ' sel' : '') + (p.old ? ' old' : '') + '">' + (open ? '<input type="checkbox" data-sel="' + esc(p.id) + '"' + (st.sel[p.id] ? ' checked' : '') + '>' : '') +
               '<div class="main"><b>' + esc(p.cust_name) + '</b><div class="meta">' + (p.kind === 'مرتجع مبيع' ? '<span class="badge b-ret">مرتجع</span>' : '<span class="badge">مبيع</span>') +
-              '<span>فاتورة ' + N(p.number) + '</span><span>' + hm(p.dt) + (p.old ? ' · ' + N(p.dt.slice(0, 10)) : '') + '</span>' + (p.net !== null && p.net !== undefined ? '<span>' + N(num(p.net)) + ' د.ل</span>' : '') +
+              brBadge(b, p.src) + '<span>فاتورة ' + N(p.number) + '</span><span>' + hm(p.dt) + (p.old ? ' · ' + N(p.dt.slice(0, 10)) : '') + '</span>' + (p.net !== null && p.net !== undefined ? '<span>' + N(num(p.net)) + ' د.ل</span>' : '') +
               (p.old ? '<span class="badge b-partial">من يوم سابق</span>' : '') + (p.status === 'معدّلة في سراج' ? '<span class="badge b-flag">معدّلة في سراج</span>' : '') + '</div>' +
               '<div class="small muted">' + esc(p.items) + '</div></div></label>';
           }).join('');
@@ -858,6 +865,7 @@
       var b = st.board;
       if (!b) return;
       qa('[data-reg]', m).forEach(function (x) { x.onclick = function () { st.region = x.dataset.reg; st.sel = {}; render(); }; });
+      qa('[data-brf]', m).forEach(function (x) { x.onclick = function () { st.brF = x.dataset.brf; st.sel = {}; render(); }; });
       var dp = q('#dpick', m);
       if (dp) dp.onchange = function () { if (!dp.value) return; st.date = dp.value; st.sel = {}; st.board = null; render(); loadBoard().then(render).catch(function (e) { toast(e.message, true); }); };
       var td = q('[data-today]', m);
