@@ -943,7 +943,11 @@
       })() + '</div>';
       var open = ses.session && ses.session.status === 'مفتوحة';
       var pend = b.pending.filter(function (p) { return p.region_id === reg; });
-      h += '<div class="sec-title"><h2>بانتظار التعيين (' + N(pend.length) + ')</h2></div>';
+      var pm = b.perms || {}, canBulk = pm.bulk || pm.del, selOK = open || canBulk;
+      var oldN = pend.filter(function (p) { return p.old; }).length;
+      if (oldN && canBulk) h += '<div class="card bulk-card"><div class="row"><div class="grow"><h2 style="margin:0">فواتير من أيام سابقة (' + N(oldN) + ')</h2>' +
+        '<div class="small muted">عالجها دفعة واحدة: حدّدها ثم اختر الإجراء من الشريط أسفل الشاشة.</div></div><button class="btn" data-selold>تحديد كل فواتير الأيام السابقة</button></div></div>';
+      h += '<div class="sec-title"><h2>بانتظار التعيين (' + N(pend.length) + ')</h2>' + (b.processed && b.processed.length && pm.bulk ? '<button class="btn sm ghost" data-proc>المعالَجة سابقاً (' + N(b.processed.length) + ')</button>' : '') + '</div>';
       if (!open) h += '<div class="msg info">افتح يوم العمل لتتمكن من تعيين الفواتير للسائقين.</div>';
       var drivers = b.drivers.filter(function (d) { return d.regions === '*' || d.regions.split(',').indexOf(reg) >= 0; });
       if (open) {
@@ -971,7 +975,7 @@
         h += '<div class="list">' + order.map(function (cid) {
           var g = groups[cid];
           return g.map(function (p) {
-            return '<label class="item tap' + (st.sel[p.id] ? ' sel' : '') + (p.old ? ' old' : '') + '">' + (open ? '<input type="checkbox" data-sel="' + esc(p.id) + '"' + (st.sel[p.id] ? ' checked' : '') + '>' : '') +
+            return '<label class="item tap' + (st.sel[p.id] ? ' sel' : '') + (p.old ? ' old' : '') + '">' + (selOK ? '<input type="checkbox" data-sel="' + esc(p.id) + '"' + (st.sel[p.id] ? ' checked' : '') + '>' : '') +
               '<div class="main"><b>' + esc(p.cust_name) + '</b><div class="meta">' + (p.kind === 'مرتجع مبيع' ? '<span class="badge b-ret">مرتجع</span>' : '<span class="badge">مبيع</span>') +
               brBadge(b, p.src) + '<span>فاتورة ' + N(p.number) + '</span><span>' + hm(p.dt) + (p.old ? ' · ' + N(dmy(p.dt)) : '') + '</span>' + (p.net !== null && p.net !== undefined ? '<span>' + N(num(p.net)) + ' د.ل</span>' : '') +
               (p.old ? '<span class="badge b-partial">من يوم سابق</span>' : '') + (p.status === 'معدّلة في سراج' ? '<span class="badge b-flag">معدّلة في سراج</span>' : '') + '</div>' +
@@ -980,10 +984,12 @@
         }).join('') + '</div>';
       }
       var n = Object.keys(st.sel).filter(function (k) { return st.sel[k]; }).length;
-      if (open && n) {
+      if (n && (open || canBulk)) {
         var dn = (b.drivers.filter(function (d) { return d.id === st.driverSel; })[0] || {}).name;
-        h += '<div style="position:sticky;bottom:12px;z-index:5"><button class="btn accent big" data-assign' + (dn ? '' : ' disabled') + '>' +
-          (dn ? 'تعيين ' + n + ' فاتورة لـ ' + esc(dn) : 'اختر السائق لتعيين ' + n + ' فاتورة') + '</button></div>';
+        h += '<div class="selbar"><div class="selbar-in"><div class="selbar-h"><b>' + N(n) + ' فاتورة محددة</b><button class="btn sm ghost" data-unsel>إلغاء التحديد</button></div>' +
+          (open ? '<button class="btn accent big" data-assign' + (dn ? '' : ' disabled') + '>' + (dn ? 'تعيين ' + n + ' فاتورة لـ ' + esc(dn) : 'اختر السائق لتعيين ' + n + ' فاتورة') + '</button>' : '') +
+          (canBulk ? '<div class="row selbar-acts">' + (pm.bulk ? '<button class="btn sm" data-bulk="outside">مسلّمة خارج المنظومة</button><button class="btn sm" data-bulk="exclude">استبعاد من اليوم</button>' : '') +
+            (pm.del ? '<button class="btn sm danger" data-bulk="delete">حذف</button>' : '') + '</div>' : '') + '</div></div>';
       }
       return h;
     },
@@ -992,6 +998,39 @@
       if (!b) return;
       qa('[data-reg]', m).forEach(function (x) { x.onclick = function () { st.region = x.dataset.reg; st.sel = {}; render(); }; });
       qa('[data-brf]', m).forEach(function (x) { x.onclick = function () { st.brF = x.dataset.brf; st.sel = {}; render(); }; });
+      var so = q('[data-selold]', m);
+      if (so) so.onclick = function () { b.pending.forEach(function (p) { if (p.old && p.region_id === st.region) st.sel[p.id] = true; }); render(); };
+      var us = q('[data-unsel]', m);
+      if (us) us.onclick = function () { st.sel = {}; render(); };
+      qa('[data-bulk]', m).forEach(function (x) {
+        x.onclick = function () {
+          var act = x.dataset.bulk, ids = Object.keys(st.sel).filter(function (k) { return st.sel[k]; });
+          var T = { outside: ['اعتبارها مسلّمة خارج المنظومة', 'تُغلق ' + ids.length + ' فاتورة على أنها سُلّمت بطريقة أخرى، وتخرج من «بانتظار التعيين». يمكن استرجاعها لاحقاً.', ['سُلّمت يدوياً', 'استلمها العميل من المخزن', 'سُلّمت قبل تشغيل المنظومة']],
+            exclude: ['استبعاد من اليوم', 'تخرج ' + ids.length + ' فاتورة من «بانتظار التعيين» ولا تُعيَّن. يمكن استرجاعها لاحقاً من «المعالَجة سابقاً».', ['مؤجلة', 'العميل طلب التأجيل', 'تنتظر مراجعة']],
+            'delete': ['حذف من المنظومة', 'تُحذف ' + ids.length + ' فاتورة من منظومة الفواتير نهائياً ولا تعود حتى لو أعاد الوكيل إرسالها. سراج لا يتأثر. لا يمكن التراجع.', ['فاتورة مكررة', 'فاتورة تجريبية', 'أُلغيت في سراج']] }[act];
+          askReason(T[0], 'السبب (يُحفظ في سجل التدقيق)', { intro: T[1], choices: T[2], ok: act === 'delete' ? 'حذف نهائياً' : 'تنفيذ' }).then(function (r) {
+            if (!r) return;
+            busy(x, true);
+            call('inv_bulk', { act: act, ids: ids, reason: r }).then(function (res) { st.sel = {}; toast('تم: ' + T[0] + ' (' + res.n + ' فاتورة)'); return loadBoard(); }).then(render).catch(function (e) { busy(x, false); toast(e.message, true); });
+          });
+        };
+      });
+      var pr = q('[data-proc]', m);
+      if (pr) pr.onclick = function () {
+        var list = b.processed, picked = {};
+        sheet('الفواتير المعالَجة سابقاً', '<p class="muted small" style="margin:0 0 10px">الفواتير المستبعدة أو المسلّمة خارج المنظومة. حدّد ما تريد إعادته إلى «بانتظار التعيين».</p><div class="list">' + list.map(function (x) {
+          return '<label class="item tap"><input type="checkbox" data-rp2="' + esc(x.id) + '"><div class="main"><b>' + esc(x.cust_name) + '</b><div class="meta"><span>فاتورة ' + N(x.number) + '</span><span>' + N(dmy(x.dt)) + '</span>' +
+            '<span class="badge' + (x.action === 'مستبعدة' ? ' b-partial' : ' b-delivered') + '">' + esc(x.action) + '</span></div><div class="small muted">' + esc(x.reason) + ' · ' + esc(x.by) + ' · ' + N(dmy(x.at)) + '</div></div></label>';
+        }).join('') + '</div><button class="btn primary big" data-restore disabled>إعادة المحدد إلى «بانتظار التعيين»</button>', function (s2) {
+          var btn = q('[data-restore]', s2.el);
+          qa('[data-rp2]', s2.el).forEach(function (c) { c.onchange = function () { picked[c.dataset.rp2] = c.checked; btn.disabled = !Object.keys(picked).some(function (k) { return picked[k]; }); }; });
+          btn.onclick = function () {
+            var ids = Object.keys(picked).filter(function (k) { return picked[k]; });
+            busy(btn, true);
+            call('inv_restore', { ids: ids }).then(function (r) { s2.close(); toast('أُعيدت ' + r.n + ' فاتورة'); return loadBoard(); }).then(render).catch(function (e) { busy(btn, false); toast(e.message, true); });
+          };
+        });
+      };
       var dp = q('#dpick', m);
       if (dp) dp.onchange = function () { if (!dp.value) return; st.date = dp.value; st.sel = {}; st.board = null; render(); loadBoard().then(render).catch(function (e) { toast(e.message, true); }); };
       var td = q('[data-today]', m);
@@ -1153,6 +1192,7 @@
       if (['on_way', 'arrived', 'delivered', 'partial', 'failed', 'picked', 'closed'].indexOf(a.state) >= 0) acts += '<button class="btn sm ghost" data-undo>تراجع خطوة للخلف (بسبب)</button>';
       if (a.state !== 'canceled') acts += '<button class="btn sm ghost" data-rp>' + ICON.print + ' إعادة طباعة الإيصال</button>';
     }
+    if (st.board.perms && st.board.perms.del) acts += '<button class="btn sm danger" data-adel>حذف التعيين والإيصال نهائياً</button>';
     if ((TABS[st.user.role] || []).some(function (t) { return t[0] === 'map'; }) && (['assigned', 'on_way', 'arrived'].indexOf(a.state) >= 0 || (a.start_at && String(a.start_at).slice(0, 10) === today())))
       acts = '<div class="row"><button class="btn sm primary" data-onmap>' + ICON.pin + ' تتبع على الخريطة</button>' + (['assigned', 'on_way', 'arrived'].indexOf(a.state) >= 0 && canShareTrack() ? '<button class="btn sm" data-trklink>رابط تتبع للعميل</button>' : '') + '</div>' + acts;
     sheet((isRet(a) ? 'مرتجع ' : 'فاتورة ') + a.inv_number + ' · إيصال ' + a.rec,
@@ -1182,6 +1222,11 @@
         };
         var u = q('[data-undo]', s.el);
         if (u) u.onclick = function () { askReason('تراجع خطوة', 'سبب التراجع (إلزامي ويظهر للمدير)', { choices: ['ضغط «وصلت» بالخطأ', 'سجّل النتيجة بالخطأ', 'تصحيح بعد التحقق'] }).then(function (r) { if (r) call('undo', { rec: a.rec, reason: r }).then(function () { done('تم التراجع'); }).catch(fail); }); };
+        var ad = q('[data-adel]', s.el);
+        if (ad) ad.onclick = function () {
+          askReason('حذف التعيين والإيصال', 'سبب الحذف (يُحفظ في سجل التدقيق)', { intro: 'يُحذف الإيصال ' + a.rec + ' وكل خطواته وصوره من المنظومة، وتعود الفاتورة ' + a.inv_number + ' إلى «بانتظار التعيين». لا يمكن التراجع عن الحذف. سراج لا يتأثر.', ok: 'حذف نهائياً' })
+            .then(function (r) { if (r) call('asg_delete', { rec: a.rec, reason: r }).then(function () { done('حُذف التعيين وعادت الفاتورة للانتظار'); }).catch(fail); });
+        };
         var c = q('[data-cancel]', s.el);
         if (c) c.onclick = function () { askReason('إلغاء التعيين', 'السبب').then(function (r) { if (r) call('reassign', { rec: a.rec, reason: r }).then(function () { done('أُلغي التعيين وعادت الفاتورة للانتظار'); }).catch(fail); }); };
         var mv = q('[data-move]', s.el);
@@ -1381,10 +1426,20 @@
         var n = b.active.filter(function (a) { return a.trip_id === t.id && a.state !== 'canceled'; }).length;
         return '<div class="item"><div class="main"><b>' + N(t.code) + ' · ' + esc(t.driver_name) + '</b><div class="meta"><span>' + N(n) + ' فاتورة</span>' + (t.truck ? '<span>' + esc(t.truck) + '</span>' : '') +
           '<span>' + (t.started_at ? 'خرج ' + hm(t.started_at) : 'لم يخرج بعد') + '</span><span>' + (t.print_count ? 'طُبع ' + N(t.print_count) + ' مرة' : '<b style="color:var(--orange)">لم يُطبع</b>') + '</span></div></div>' +
-          '<button class="btn sm primary" data-pt="' + esc(t.id) + '">' + ICON.print + ' طباعة</button></div>';
+          '<button class="btn sm primary" data-pt="' + esc(t.id) + '">' + ICON.print + ' طباعة</button>' + (b.perms && b.perms.del ? '<button class="btn sm danger" data-tdel="' + esc(t.id) + '" aria-label="حذف الكشف">حذف</button>' : '') + '</div>';
       }).join('') + '</div>';
     },
-    bind: function (m) { qa('[data-pt]', m).forEach(function (b) { b.onclick = function () { printTrip(b.dataset.pt); }; }); }
+    bind: function (m) {
+      qa('[data-pt]', m).forEach(function (b) { b.onclick = function () { printTrip(b.dataset.pt); }; });
+      qa('[data-tdel]', m).forEach(function (b) {
+        b.onclick = function () {
+          var t = st.board.trips.filter(function (x) { return x.id === b.dataset.tdel; })[0];
+          var n = st.board.active.filter(function (a) { return a.trip_id === t.id; }).length;
+          askReason('حذف الكشف ' + t.code, 'سبب الحذف (يُحفظ في سجل التدقيق)', { intro: 'يُحذف الكشف وكل إيصالاته (' + n + ') وخطوات السائق فيها، وتعود فواتيره إلى «بانتظار التعيين». لا يمكن التراجع عن الحذف.', ok: 'حذف الكشف نهائياً' })
+            .then(function (r) { if (r) call('trip_delete', { id: t.id, reason: r }).then(function () { toast('حُذف الكشف'); return loadBoard(); }).then(render).catch(function (e) { toast(e.message, true); }); });
+        };
+      });
+    }
   };
 
   function qrSvg(text, cell) {
@@ -1798,52 +1853,169 @@
   }
 
   /* ===================== التقارير ===================== */
+  var RES_AR = { delivered: 'تم التسليم', partial: 'تسليم جزئي', failed: 'تعذّر التسليم', picked: 'استُلم المرتجع', open: 'مفتوحة' };
+  function repF() { return st.rep || (st.rep = { from: today(), to: today(), per: 'd', drivers: [], region: '', kind: '', result: '', cust: '', item: '', view: 'drivers' }); }
+  function pct(a, b) { return b ? Math.round(a * 100 / b) + '%' : '—'; }
+  function mins(m) { return m === null || m === undefined ? '—' : m < 60 ? m + ' د' : Math.floor(m / 60) + ' س ' + (m % 60) + ' د'; }
+  function money(v) { return v === null || v === undefined ? '—' : num(Math.round(v * 1000) / 1000); }
   VIEWS.reports = {
     load: function () {
-      var f = st.rep || (st.rep = { from: today(), to: today() });
-      return call('report_day', { from: f.from, to: f.to }).then(function (r) { st.repData = r; });
+      var f = repF();
+      return call('report_drivers', { from: f.from, to: f.to, f: { drivers: f.drivers, region: f.region, kind: f.kind, result: f.result, cust: f.cust, item: f.item } }).then(function (r) { st.repData = r; });
     },
     html: function () {
-      var f = st.rep || { from: today(), to: today() };
-      var r = st.repData;
-      var h = '<div class="card"><div class="row"><div class="field grow"><label for="rf1">من</label>' + dateField('rf1', f.from, { label: 'من' }) + '</div>' +
+      var f = repF(), r = st.repData;
+      var opts = function (list, val, all) { return '<option value="">' + all + '</option>' + list.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (o[0] === val ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join(''); };
+      var dn = f.drivers.length ? (f.drivers.length === 1 && r ? ((r.all_drivers.filter(function (d) { return d.id === f.drivers[0]; })[0] || {}).name || '١ سائق') : f.drivers.length + ' سائقين') : 'كل السائقين';
+      var nf = ['region', 'kind', 'result', 'cust', 'item'].filter(function (k) { return f[k]; }).length + (f.drivers.length ? 1 : 0);
+      var h = '<div class="card rep-filters"><div class="chips">' + [['d', 'اليوم'], ['y', 'أمس'], ['w', 'آخر 7 أيام'], ['m', 'هذا الشهر'], ['c', 'فترة مخصصة']].map(function (p) {
+        return '<button class="chip' + (f.per === p[0] ? ' on' : '') + '" data-per="' + p[0] + '">' + p[1] + '</button>'; }).join('') + '</div>' +
+        '<div class="row rep-dates' + (f.per === 'c' ? '' : ' hide') + '"><div class="field grow"><label for="rf1">من</label>' + dateField('rf1', f.from, { label: 'من' }) + '</div>' +
         '<div class="field grow"><label for="rf2">إلى</label>' + dateField('rf2', f.to, { label: 'إلى' }) + '</div></div>' +
-        '<div class="chips" style="margin-top:10px">' + [['d', 'اليوم'], ['w', 'آخر 7 أيام'], ['m', 'هذا الشهر']].map(function (p) { return '<button class="chip" data-per="' + p[0] + '">' + p[1] + '</button>'; }).join('') +
-        '</div><div class="row" style="margin-top:10px"><button class="btn primary" data-run>عرض</button><button class="btn ghost" data-csv>تصدير Excel</button><button class="btn ghost" data-prn>' + ICON.print + ' طباعة</button></div></div>';
+        '<div class="rep-grid">' +
+        '<div class="field"><label>السائق</label><button class="input selbtn" data-pickdrv>' + esc(dn) + '</button></div>' +
+        '<div class="field"><label for="rfr">المنطقة</label><select id="rfr" class="input">' + opts(r ? r.regions.map(function (g) { return [g.id, g.name]; }) : [], f.region, 'كل المناطق') + '</select></div>' +
+        '<div class="field"><label for="rfk">النوع</label><select id="rfk" class="input">' + opts([['sale', 'مبيعات'], ['ret', 'مرتجعات']], f.kind, 'الكل') + '</select></div>' +
+        '<div class="field"><label for="rfs">النتيجة</label><select id="rfs" class="input">' + opts(Object.keys(RES_AR).map(function (k) { return [k, RES_AR[k]]; }), f.result, 'كل النتائج') + '</select></div>' +
+        '<div class="field"><label for="rfc">العميل</label><input id="rfc" class="input" value="' + esc(f.cust) + '" placeholder="جزء من اسم العميل"></div>' +
+        '<div class="field"><label for="rfi">الصنف</label><input id="rfi" class="input" value="' + esc(f.item) + '" placeholder="جزء من اسم الصنف"></div></div>' +
+        '<div class="row" style="margin-top:12px"><button class="btn primary" data-run>عرض التقرير</button>' + (nf ? '<button class="btn ghost" data-clr>مسح الفلاتر (' + N(nf) + ')</button>' : '') +
+        '<span class="grow"></span><button class="btn ghost" data-xl>تصدير Excel</button><button class="btn ghost" data-prn>' + ICON.print + ' طباعة</button></div></div>';
       if (!r) return h + '<div class="loading"><span class="spin"></span></div>';
-      h += '<div class="card"><h2>أداء السائقين</h2>' + (r.drivers.length ? '<div class="scroll-x"><table class="tbl"><thead><tr><th>السائق</th><th>فواتير</th><th>سُلّمت</th><th>جزئي</th><th>تعذّر</th><th>مرتجعات</th><th>مفتوحة</th><th>خارج النطاق</th><th>وصول مرفوض</th><th>نسبة التعذّر</th></tr></thead><tbody>' +
-        r.drivers.map(function (d) { return '<tr><td>' + esc(d.driver) + '</td><td>' + N(d.total) + '</td><td>' + N(d.delivered) + '</td><td>' + N(d.partial) + '</td><td>' + N(d.failed) + '</td><td>' + N(d.returns) + '</td><td>' + N(d.open) + '</td><td>' + N(d.far) + '</td><td>' + N(d.rejected || 0) + '</td><td>' + N(d.total ? Math.round(d.failed * 100 / d.total) + '%' : '—') + '</td></tr>'; }).join('') +
-        '</tbody></table></div>' : '<p class="muted">لا توجد بيانات للفترة</p>') + '</div>';
-      h += '<div class="card"><h2>الفواتير (' + N(r.items.length) + ')</h2><div class="scroll-x"><table class="tbl"><thead><tr><th>الإيصال</th><th>الفاتورة</th><th>العميل</th><th>السائق</th><th>الحالة</th><th>الوصول</th><th>النتيجة</th></tr></thead><tbody>' +
-        r.items.map(function (a) { return '<tr><td>' + N(a.rec) + '</td><td>' + N(a.inv_number) + '</td><td>' + esc(a.cust_name) + '</td><td>' + esc(a.driver_name) + '</td><td>' + badge(a.state, a.state_ar) + '</td><td>' + hm(a.arrive_at) + (a.arrive_flag ? ' <span class="badge b-flag">' + esc(a.arrive_flag) + '</span>' : '') + '</td><td>' + hm(a.result_at) + ' ' + esc(a.reason || '') + '</td></tr>'; }).join('') +
+      var T = r.drivers.reduce(function (s, d) { ['total', 'delivered', 'partial', 'failed', 'returns', 'open', 'qty_sent', 'qty_done', 'qty_short', 'net_done'].forEach(function (k) { s[k] = (s[k] || 0) + (d[k] || 0); }); return s; }, {});
+      var closed = (T.total || 0) - (T.open || 0);
+      h += '<div id="repout"><div class="rep-period small muted">' + (r.from === r.to ? dlong(r.from) : 'من ' + dlong(r.from) + ' إلى ' + dlong(r.to)) + '</div>';
+      h += '<div class="kpis rep-kpis">' + [['الفواتير', num(T.total || 0), r.drivers.length + ' سائق'], ['سُلّمت', num((T.delivered || 0) + (T.partial || 0)), 'منها جزئي ' + num(T.partial || 0)],
+        ['تعذّر', num(T.failed || 0), ''], ['مرتجعات مستلمة', num(T.returns || 0), ''], ['مفتوحة', num(T.open || 0), ''],
+        ['نسبة الإنجاز', pct((T.delivered || 0) + (T.partial || 0) + (T.returns || 0), closed), 'من المغلقة'],
+        ['الكميات المسلّمة', num(T.qty_done || 0), 'من ' + num(T.qty_sent || 0) + (T.qty_short ? ' · نقص ' + num(T.qty_short) : '')]]
+        .concat(r.amounts ? [['قيمة المسلّم', money(T.net_done || 0), 'صافي الفواتير']] : [])
+        .map(function (k) { return '<div class="kpi"><span>' + k[0] + '</span><b class="num">' + esc(k[1]) + '</b>' + (k[2] ? '<small>' + esc(k[2]) + '</small>' : '') + '</div>'; }).join('') + '</div>';
+      h += '<div class="seg">' + [['drivers', 'السائقون'], ['items', 'الأصناف والكميات'], ['list', 'الفواتير (' + r.list.length + ')']].map(function (v) {
+        return '<button class="' + (f.view === v[0] ? 'on' : '') + '" data-rv="' + v[0] + '">' + v[1] + '</button>'; }).join('') + '</div>';
+      if (f.view === 'drivers') {
+        h += '<div class="card">' + (r.drivers.length ? '<div class="scroll-x"><table class="tbl tbl-click"><thead><tr><th>السائق</th><th>فواتير</th><th>سُلّمت</th><th>جزئي</th><th>تعذّر</th><th>مرتجعات</th><th>مفتوحة</th><th>الإنجاز</th><th>الكمية المسلّمة</th><th>النقص</th>' +
+          (r.amounts ? '<th>قيمة المسلّم</th>' : '') + '<th>متوسط الطريق</th><th>متوسط البقاء</th><th>خارج النطاق</th><th>أيام</th><th>كشوف</th><th>عملاء</th></tr></thead><tbody>' +
+          r.drivers.map(function (d) {
+            return '<tr data-drv="' + esc(d.id) + '"><td><b>' + esc(d.driver) + '</b></td><td>' + N(d.total) + '</td><td>' + N(d.delivered) + '</td><td>' + N(d.partial) + '</td><td>' + N(d.failed) + '</td><td>' + N(d.returns) + '</td><td>' + N(d.open) + '</td>' +
+              '<td>' + (d.rate === null ? '—' : '<span class="rate' + (d.rate >= 90 ? ' good' : d.rate >= 70 ? ' mid' : ' bad') + '">' + N(d.rate + '%') + '</span>') + '</td><td>' + N(num(d.qty_done)) + ' <span class="muted small">/ ' + N(num(d.qty_sent)) + '</span></td><td>' + N(num(d.qty_short)) + '</td>' +
+              (r.amounts ? '<td>' + N(money(d.net_done)) + '</td>' : '') + '<td>' + N(mins(d.avg_go)) + '</td><td>' + N(mins(d.avg_stay)) + '</td><td>' + N(d.far) + '</td><td>' + N(d.days) + '</td><td>' + N(d.trips) + '</td><td>' + N(d.custs) + '</td></tr>';
+          }).join('') + '</tbody></table></div><p class="small muted" style="margin:8px 0 0">اضغط على أي سائق لعرض تقريره التفصيلي.</p>' : '<div class="empty">لا توجد بيانات بهذه الفلاتر</div>') + '</div>';
+      } else if (f.view === 'items') {
+        h += VIEWS.reports.itemsTbl(r, r.items);
+      } else {
+        h += VIEWS.reports.listTbl(r, r.list);
+      }
+      return h + '</div>';
+    },
+    itemsTbl: function (r, items, oneDrv) {
+      var dname = {}; r.drivers.forEach(function (d) { dname[d.id] = d.driver; });
+      items = items.slice().sort(function (a, b) { return (dname[a.driver_id] || '').localeCompare(dname[b.driver_id] || '') || b.sent - a.sent; });
+      if (!items.length) return '<div class="card empty">لا توجد أصناف</div>';
+      return '<div class="card"><div class="scroll-x"><table class="tbl"><thead><tr>' + (oneDrv ? '' : '<th>السائق</th>') + '<th>الصنف</th><th>الوحدة</th><th>النوع</th><th>المرسَل</th><th>المسلّم</th><th>النقص</th><th>الهدايا</th><th>عدد الفواتير</th></tr></thead><tbody>' +
+        items.map(function (i) { return '<tr>' + (oneDrv ? '' : '<td>' + esc(dname[i.driver_id] || '') + '</td>') + '<td>' + esc(i.item) + '</td><td>' + esc(i.unit || '') + '</td><td>' + (i.ret ? 'مرتجع' : 'مبيع') + '</td><td>' + N(num(i.sent)) + '</td><td>' + N(num(i.done)) + '</td><td>' + (i.short ? '<b class="txt-bad">' + N(num(i.short)) + '</b>' : N(0)) + '</td><td>' + N(num(i.gift)) + '</td><td>' + N(i.invs) + '</td></tr>'; }).join('') +
         '</tbody></table></div></div>';
-      return h;
+    },
+    listTbl: function (r, list, oneDrv) {
+      if (!list.length) return '<div class="card empty">لا توجد فواتير</div>';
+      var more = list.length > 400;
+      return '<div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>التاريخ</th><th>الفاتورة</th><th>النوع</th><th>العميل</th>' + (oneDrv ? '' : '<th>السائق</th>') + '<th>الحالة</th><th>الكمية</th><th>النقص</th>' + (r.amounts ? '<th>الصافي</th>' : '') + '<th>الطريق</th><th>البقاء</th><th>الوصول</th><th>السبب</th></tr></thead><tbody>' +
+        list.slice(0, 400).map(function (a) {
+          return '<tr><td>' + N(dmy(a.assigned_at)) + ' ' + hm(a.assigned_at) + '</td><td>' + N(a.inv_number) + '</td><td>' + (isRet(a) ? 'مرتجع' : 'مبيع') + '</td><td>' + esc(a.cust_name) + '</td>' + (oneDrv ? '' : '<td>' + esc(a.driver_name) + '</td>') +
+            '<td>' + badge(a.state, a.state_ar) + '</td><td>' + N(num(a.qty)) + '</td><td>' + N(num(a.qty_short)) + '</td>' + (r.amounts ? '<td>' + N(money(a.net)) + '</td>' : '') + '<td>' + N(mins(a.go_min)) + '</td><td>' + N(mins(a.stay_min)) + '</td>' +
+            '<td>' + hm(a.arrive_at) + (a.arrive_flag ? ' <span class="badge b-flag">' + esc(a.arrive_flag) + '</span>' : '') + '</td><td>' + esc(a.reason || '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>' + (more ? '<p class="small muted">يُعرض أول ٤٠٠ فاتورة. صدّر إلى Excel لرؤية الكل.</p>' : '') + '</div>';
+    },
+    driver: function (id) {
+      var r = st.repData, d = r.drivers.filter(function (x) { return x.id === id; })[0];
+      if (!d) return;
+      var items = r.items.filter(function (i) { return i.driver_id === id; }), list = r.list.filter(function (a) { return a.driver_id === id; });
+      var tab = 'items';
+      var body = function () {
+        return '<div class="rep-period small muted">' + (r.from === r.to ? dlong(r.from) : 'من ' + dlong(r.from) + ' إلى ' + dlong(r.to)) + '</div>' +
+          '<div class="kpis rep-kpis">' + [['الفواتير', d.total], ['سُلّمت', d.delivered + d.partial], ['تعذّر', d.failed], ['مرتجعات', d.returns], ['مفتوحة', d.open], ['الإنجاز', d.rate === null ? '—' : d.rate + '%'],
+            ['المسلّم من الكميات', num(d.qty_done) + ' / ' + num(d.qty_sent)], ['النقص', num(d.qty_short)]].concat(r.amounts ? [['قيمة المسلّم', money(d.net_done)]] : [])
+            .concat([['متوسط الطريق', mins(d.avg_go)], ['متوسط البقاء عند العميل', mins(d.avg_stay)], ['خارج النطاق', d.far], ['أيام العمل', d.days], ['الكشوف', d.trips], ['العملاء', d.custs]])
+            .map(function (k) { return '<div class="kpi"><span>' + k[0] + '</span><b class="num">' + esc(k[1]) + '</b></div>'; }).join('') + '</div>' +
+          '<div class="row"><button class="btn primary" data-trk>' + ICON.pin + ' تتبع السائق على الخريطة</button><button class="btn ghost" data-dxl>تصدير Excel</button></div>' +
+          '<div class="seg"><button data-dt="items" class="' + (tab === 'items' ? 'on' : '') + '">الأصناف والكميات</button><button data-dt="list" class="' + (tab === 'list' ? 'on' : '') + '">الفواتير (' + list.length + ')</button></div>' +
+          (tab === 'items' ? VIEWS.reports.itemsTbl(r, items, true) : VIEWS.reports.listTbl(r, list, true));
+      };
+      sheet('تقرير السائق: ' + d.driver, '<div data-db></div>', function (s) {
+        s.el.parentNode.classList.add('wide');
+        var paint = function () {
+          q('[data-db]', s.el).innerHTML = body();
+          qa('[data-dt]', s.el).forEach(function (b) { b.onclick = function () { tab = b.dataset.dt; paint(); }; });
+          q('[data-trk]', s.el).onclick = function () { s.close(); MV.sel = id; MV.focusRec = null; MV.fitted = false; MV.day = null; st.tab = 'map'; render(); refresh(false); };
+          q('[data-dxl]', s.el).onclick = function () { VIEWS.reports.exportX({ from: r.from, to: r.to, drivers: [d], items: items, list: list, amounts: r.amounts }, 'driver-' + d.id); };
+        };
+        paint();
+      });
+    },
+    exportX: function (r, who) {
+      withXLSX().then(function (X) {
+        var dname = {}; r.drivers.forEach(function (d) { dname[d.id] = d.driver; });
+        var s1 = [['السائق', 'الفواتير', 'سُلّمت', 'جزئي', 'تعذّر', 'مرتجعات', 'مفتوحة', 'نسبة الإنجاز %', 'الكمية المرسلة', 'الكمية المسلّمة', 'النقص'].concat(r.amounts ? ['قيمة المسلّم', 'صافي الفواتير'] : [])
+          .concat(['متوسط الطريق (د)', 'متوسط البقاء (د)', 'خارج النطاق', 'وصول مرفوض', 'أيام', 'كشوف', 'عملاء'])].concat(r.drivers.map(function (d) {
+          return [d.driver, d.total, d.delivered, d.partial, d.failed, d.returns, d.open, d.rate, d.qty_sent, d.qty_done, d.qty_short].concat(r.amounts ? [d.net_done, d.net] : []).concat([d.avg_go, d.avg_stay, d.far, d.rejected, d.days, d.trips, d.custs]);
+        }));
+        var s2 = [['السائق', 'الصنف', 'الوحدة', 'النوع', 'المرسَل', 'المسلّم', 'النقص', 'الهدايا', 'عدد الفواتير']].concat(r.items.map(function (i) { return [dname[i.driver_id] || '', i.item, i.unit, i.ret ? 'مرتجع' : 'مبيع', i.sent, i.done, i.short, i.gift, i.invs]; }));
+        var s3 = [['التاريخ', 'الوقت', 'الإيصال', 'الفاتورة', 'النوع', 'العميل', 'السائق', 'الحالة', 'الكمية', 'النقص'].concat(r.amounts ? ['الصافي'] : []).concat(['الطريق (د)', 'البقاء (د)', 'الوصول', 'تنبيه الموقع', 'السبب'])]
+          .concat(r.list.map(function (a) { return [dmy(a.assigned_at), String(a.assigned_at).slice(11, 16), a.rec, a.inv_number, a.kind, a.cust_name, a.driver_name, a.state_ar, a.qty, a.qty_short].concat(r.amounts ? [a.net] : []).concat([a.go_min, a.stay_min, String(a.arrive_at || '').slice(11, 16), a.arrive_flag, a.reason]); }));
+        var wb = X.utils.book_new();
+        [[s1, 'السائقون', 18], [s2, 'الأصناف', 16], [s3, 'الفواتير', 14]].forEach(function (x) {
+          var ws = X.utils.aoa_to_sheet(x[0]); ws['!cols'] = x[0][0].map(function () { return { wch: x[2] }; }); ws['!views'] = [{ RTL: true }];
+          X.utils.book_append_sheet(wb, ws, x[1]);
+        });
+        wb.Workbook = { Views: [{ RTL: true }] };
+        X.writeFile(wb, 'rakan-drivers-' + (who ? who + '-' : '') + r.from + '_' + r.to + '.xlsx');
+      }).catch(function (e) { toast(e.message, true); });
     },
     bind: function (m) {
-      var run = function () { st.rep = { from: q('#rf1').value, to: q('#rf2').value }; st.repData = null; render(); VIEWS.reports.load().then(render).catch(function (e) { toast(e.message, true); }); };
+      var f = repF();
+      var read = function () {
+        if (q('#rf1')) { f.from = q('#rf1').value || f.from; f.to = q('#rf2').value || f.to; }
+        f.region = q('#rfr').value; f.kind = q('#rfk').value; f.result = q('#rfs').value; f.cust = q('#rfc').value.trim(); f.item = q('#rfi').value.trim();
+        if (f.from > f.to) { var t = f.from; f.from = f.to; f.to = t; }
+      };
+      var run = function () { read(); st.repData = null; render(); VIEWS.reports.load().then(render).catch(function (e) { toast(e.message, true); }); };
       q('[data-run]', m).onclick = run;
+      [q('#rfc', m), q('#rfi', m)].forEach(function (i) { i.onkeydown = function (e) { if (e.key === 'Enter') run(); }; });
       qa('[data-per]', m).forEach(function (b) {
         b.onclick = function () {
-          var d = today(), from = d;
-          if (b.dataset.per === 'w') from = RK.nowStr(new Date(Date.now() - 6 * 864e5)).slice(0, 10);
-          if (b.dataset.per === 'm') from = d.slice(0, 8) + '01';
-          q('#rf1').value = from; q('#rf2').value = d; run();
+          var p = b.dataset.per, d = today(), day = function (n) { return RK.nowStr(new Date(Date.now() - n * 864e5)).slice(0, 10); };
+          f.per = p;
+          if (p === 'c') { render(); return; }
+          f.from = p === 'd' ? d : p === 'y' ? day(1) : p === 'w' ? day(6) : d.slice(0, 8) + '01';
+          f.to = p === 'y' ? day(1) : d;
+          run();
         };
       });
-      q('[data-csv]', m).onclick = function () {
-        var r = st.repData; if (!r) return;
-        var rows = [['الإيصال', 'الفاتورة', 'النوع', 'العميل', 'السائق', 'الحالة', 'وقت التعيين', 'الوصول', 'المسافة (م)', 'تنبيه الموقع', 'النتيجة', 'وقت النتيجة', 'السبب', 'عودة الإيصال', 'أُغلقت']]
-          .concat(r.items.map(function (a) { return [a.rec, a.inv_number, a.kind, a.cust_name, a.driver_name, a.state_ar, a.assigned_at, a.arrive_at, a.arrive_dist, a.arrive_flag, STATE_AR[a.result] || '', a.result_at, a.reason, a.back_at, a.closed_at]; }));
-        var csv = '﻿' + rows.map(function (x) { return x.map(function (v) { v = String(v === undefined ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\r\n');
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-        a.download = 'rakan-report-' + r.from + '_' + r.to + '.csv';
-        a.click();
+      qa('.rep-dates input', m).forEach(function (i) { i.onchange = function () { read(); render(); }; });
+      var clr = q('[data-clr]', m);
+      if (clr) clr.onclick = function () { f.drivers = []; f.region = f.kind = f.result = f.cust = f.item = ''; q('#rfr').value = q('#rfk').value = q('#rfs').value = q('#rfc').value = q('#rfi').value = ''; run(); };
+      q('[data-pickdrv]', m).onclick = function () {
+        var r = st.repData, all = r ? r.all_drivers : [], pick = {}; f.drivers.forEach(function (x) { pick[x] = true; });
+        sheet('اختر السائقين', '<div class="row" style="margin-bottom:8px"><button class="btn sm ghost" data-all>الكل</button><button class="btn sm ghost" data-none>لا أحد</button></div><div class="list">' +
+          all.map(function (d) { return '<label class="item tap"><input type="checkbox" data-pd="' + esc(d.id) + '"' + (pick[d.id] ? ' checked' : '') + '><div class="main"><b>' + esc(d.name) + '</b></div></label>'; }).join('') +
+          '</div><button class="btn primary big" data-okd>تطبيق</button>', function (s) {
+          q('[data-all]', s.el).onclick = function () { qa('[data-pd]', s.el).forEach(function (c) { c.checked = true; }); };
+          q('[data-none]', s.el).onclick = function () { qa('[data-pd]', s.el).forEach(function (c) { c.checked = false; }); };
+          q('[data-okd]', s.el).onclick = function () {
+            var sel = qa('[data-pd]', s.el).filter(function (c) { return c.checked; }).map(function (c) { return c.dataset.pd; });
+            f.drivers = sel.length === all.length ? [] : sel; s.close(); run();
+          };
+        });
       };
+      qa('[data-rv]', m).forEach(function (b) { b.onclick = function () { f.view = b.dataset.rv; render(); }; });
+      qa('[data-drv]', m).forEach(function (tr) { tr.onclick = function () { VIEWS.reports.driver(tr.dataset.drv); }; });
+      q('[data-xl]', m).onclick = function () { if (st.repData) VIEWS.reports.exportX(st.repData); };
       q('[data-prn]', m).onclick = function () {
-        var P = document.getElementById('print');
-        P.innerHTML = '<div style="padding:12mm;font-family:Tajawal,sans-serif"><div class="p-head"><img src="logo.png" alt=""><div class="t"><b>تقرير التسليم</b><span>من ' + esc(st.repData.from) + ' إلى ' + esc(st.repData.to) + '</span></div></div>' +
-          q('#main').querySelectorAll('.card')[1].outerHTML + q('#main').querySelectorAll('.card')[2].outerHTML + '</div>';
+        var r = st.repData; if (!r) return;
+        var P = document.getElementById('print'), saved = f.view, parts = [];
+        ['drivers', 'items'].forEach(function (v) { f.view = v; var tmp = document.createElement('div'); tmp.innerHTML = VIEWS.reports.html(); var o = q('#repout', tmp); qa('.seg', o).forEach(function (x) { x.remove(); }); parts.push(v === 'drivers' ? o.innerHTML : q('.card', o).outerHTML); });
+        f.view = saved;
+        P.innerHTML = '<div style="padding:10mm;font-family:Tajawal,sans-serif"><div class="p-head"><img src="logo.png" alt=""><div class="t"><b>تقرير السائقين التفصيلي</b><span>' + (r.from === r.to ? dlong(r.from) : 'من ' + dlong(r.from) + ' إلى ' + dlong(r.to)) + '</span></div></div>' + parts.join('<h3>الأصناف والكميات</h3>') + '</div>';
         setTimeout(function () { window.print(); }, 100);
       };
     }
@@ -1903,18 +2075,28 @@
       '<div class="field" id="utr"><label for="ut">الشاحنة (للسائق)</label><input id="ut" class="input" value="' + esc(u.truck || '') + '" placeholder="النوع ورقم اللوحة"></div>' +
       '<div class="field"><label for="up">رقم الهاتف</label><input id="up" class="input ltr" inputmode="tel" value="' + esc(u.phone || '') + '"></div>' +
       '<div class="field" id="uem"><label for="ue">البريد الإلكتروني (للمدير)</label><input id="ue" class="input ltr" value="' + esc(u.email || '') + '"></div>' +
+      '<div class="field" id="upm"><span class="lbl">صلاحيات إضافية</span>' +
+        '<label class="chk"><input type="checkbox" data-perm="bulk"' + (String(u.perms || '').indexOf('bulk') >= 0 ? ' checked' : '') + '> معالجة فواتير الأيام السابقة دفعة واحدة (استبعاد، مسلّمة خارج المنظومة)</label>' +
+        '<label class="chk"><input type="checkbox" data-perm="del"' + (String(u.perms || '').indexOf('del') >= 0 ? ' checked' : '') + '> الحذف (فواتير، تعيينات وإيصالات، كشوف)</label></div>' +
       (isNew ? '' : '<label class="chk"><input type="checkbox" id="ua"' + (u.active ? ' checked' : '') + '> الحساب نشط</label>' +
         '<label class="chk"><input type="checkbox" id="upin"> إصدار رقم سري جديد (نسيه المستخدم)</label>' +
         (u.role === 'driver' ? '<label class="chk"><input type="checkbox" id="udev"> إلغاء تسجيل هاتفه (ليسجّل هاتفاً جديداً عند دخوله)</label>' : '')) +
-      '<div id="uerr"></div><button class="btn primary big" id="usv">حفظ</button></form>', function (s) {
+      '<div id="uerr"></div><button class="btn primary big" id="usv">حفظ</button>' + (isNew || u.id === st.user.id ? '' : '<button type="button" class="btn danger" id="udel" style="margin-top:4px">حذف المستخدم نهائياً</button>') + '</form>', function (s) {
       var role = q('#ur', s.el);
       function vis() {
         var r = role.value;
         q('#urg', s.el).hidden = r === 'manager' || r === 'accountant';
         q('#utr', s.el).hidden = r !== 'driver';
         q('#uem', s.el).hidden = r !== 'manager';
+        q('#upm', s.el).hidden = r !== 'supervisor' && r !== 'accountant';
       }
       role.onchange = vis; vis();
+      var ud = q('#udel', s.el);
+      if (ud) ud.onclick = function () {
+        confirmBox('حذف مستخدم', 'حذف <b>' + esc(u.name) + '</b> نهائياً؟ يبقى ما قام به محفوظاً في سجل التدقيق والتقارير باسمه. إن أردت منعه مؤقتاً فقط، ألغِ «الحساب نشط» بدل الحذف.', 'حذف نهائياً').then(function (y) {
+          if (y) call('user_delete', { id: u.id }).then(function () { s.close(); toast('حُذف ' + u.name); return VIEWS.users.load(); }).then(render).catch(function (e) { toast(e.message, true); });
+        });
+      };
       var uw = q('#uw', s.el);
       function wsVis() {
         if (!uw) return;
@@ -1931,6 +2113,7 @@
         var body = { id: u.id, name: q('#un', s.el).value.trim(), username: q('#uu', s.el).value.trim().toLowerCase(), role: role.value,
           regions: qa('#urg input:checked', s.el).map(function (c) { return c.value; }).join(','), truck: q('#ut', s.el).value.trim(),
           phone: q('#up', s.el).value.trim(), email: q('#ue', s.el).value.trim(),
+          perms: (role.value === 'supervisor' || role.value === 'accountant') ? qa('[data-perm]:checked', s.el).map(function (c) { return c.dataset.perm; }).join(',') : '',
           ws: uw ? uw.value : undefined, active: isNew ? true : q('#ua', s.el).checked, reset_pin: !isNew && q('#upin', s.el).checked, reset_device: !isNew && q('#udev', s.el) && q('#udev', s.el).checked };
         call('user_save', { user: body }).then(function (r) {
           s.close();
@@ -2078,9 +2261,17 @@
   function regionsForm() {
     var regs = brRegions();
     sheet('المناطق', '<div class="msg info">كل سائق وعميل يتبع منطقة، ولكل منطقة مشرف أو أكثر. العملاء غير الموزّعين يتبعون أول منطقة نشطة.</div><div class="list">' + regs.map(function (r) {
-      return '<div class="item"><div class="main"><input class="input" data-rn="' + esc(r.id) + '" value="' + esc(r.name) + '"></div><label class="chk"><input type="checkbox" data-ra="' + esc(r.id) + '"' + (r.active ? ' checked' : '') + '> نشطة</label><button class="btn sm" data-rs="' + esc(r.id) + '">حفظ</button></div>';
+      return '<div class="item"><div class="main"><input class="input" data-rn="' + esc(r.id) + '" value="' + esc(r.name) + '"></div><label class="chk"><input type="checkbox" data-ra="' + esc(r.id) + '"' + (r.active ? ' checked' : '') + '> نشطة</label><button class="btn sm" data-rs="' + esc(r.id) + '">حفظ</button><button class="btn sm danger" data-rdel="' + esc(r.id) + '" aria-label="حذف">حذف</button></div>';
     }).join('') + '</div><div class="row"><input class="input grow" id="nr" placeholder="اسم منطقة جديدة"><button class="btn accent" data-add>إضافة</button></div>', function (s) {
       q('[data-add]', s.el).onclick = function () { call('region_save', { name: q('#nr', s.el).value.trim() }).then(function () { s.close(); toast('أُضيفت المنطقة'); return VIEWS.users.load(); }).then(function () { render(); regionsForm(); }).catch(function (e) { toast(e.message, true); }); };
+      qa('[data-rdel]', s.el).forEach(function (b) {
+        b.onclick = function () {
+          var r = regs.filter(function (x) { return x.id === b.dataset.rdel; })[0];
+          confirmBox('حذف منطقة', 'حذف منطقة <b>' + esc(r.name) + '</b> نهائياً؟ يعود عملاؤها إلى المنطقة الافتراضية.', 'حذف').then(function (y) {
+            if (y) call('region_delete', { id: r.id }).then(function () { s.close(); toast('حُذفت المنطقة'); return VIEWS.users.load(); }).then(render).catch(function (e) { toast(e.message, true); });
+          });
+        };
+      });
       qa('[data-rs]', s.el).forEach(function (b) { b.onclick = function () { var id = b.dataset.rs; call('region_save', { id: id, name: q('[data-rn="' + id + '"]', s.el).value.trim(), active: q('[data-ra="' + id + '"]', s.el).checked }).then(function () { toast('حُفظت'); VIEWS.users.load().then(render); }).catch(function (e) { toast(e.message, true); }); }; });
     });
   }

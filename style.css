@@ -404,3 +404,37 @@ button.brsw:hover { border-color: var(--blue); }
 .day-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .day-kpis .kpi { padding: 12px 14px; }
 @media (max-width: 899px) { .day-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .day-kpis .kpi b { font-size: 22px; } }
+
+/* ===== 2.8: معالجة جماعية + تقارير السائقين ===== */
+.hide { display: none !important; }
+.bulk-card { border-color: var(--warn); background: var(--warn-soft); }
+.bulk-card h2 { color: var(--warn); }
+.selbar { position: sticky; bottom: 12px; z-index: 6; margin-top: 12px; }
+.selbar-in { background: var(--card); border: 1.5px solid var(--blue); border-radius: 16px; padding: 12px; box-shadow: 0 10px 30px rgba(8,56,111,.22); display: grid; gap: 10px; }
+.selbar-h { display: flex; align-items: center; gap: 8px; } .selbar-h b { flex: 1; color: var(--blue-deep); }
+.selbar-acts { gap: 8px; } .selbar-acts .btn { flex: 1 1 140px; }
+@media (max-width: 899px) { .selbar { bottom: 76px; } }
+.btn.danger { border-color: var(--err); color: var(--err); }
+.btn.danger.primary, .btn.danger:hover { background: var(--err); color: #fff; }
+.rep-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 12px; }
+.rep-dates { margin-top: 10px; }
+.selbtn { text-align: start; cursor: pointer; font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rep-period { margin: 4px 2px 10px; font-weight: 700; }
+.rep-kpis { margin-bottom: 14px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.rep-kpis .kpi b { font-size: 22px; }
+.kpi small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.seg { display: flex; gap: 4px; background: var(--blue-soft); padding: 4px; border-radius: 14px; margin: 0 0 12px; overflow-x: auto; }
+.seg button { flex: 1; min-height: 40px; border: 0; background: transparent; border-radius: 10px; font: inherit; font-weight: 800; color: var(--blue-deep); cursor: pointer; white-space: nowrap; padding: 0 12px; }
+.seg button.on { background: var(--card); color: var(--blue); box-shadow: 0 2px 6px rgba(8,56,111,.15); }
+.tbl-click tbody tr { cursor: pointer; } .tbl-click tbody tr:hover td { background: var(--blue-soft); }
+.rate { padding: 2px 8px; border-radius: 999px; font-weight: 800; }
+.rate.good { background: var(--ok-soft); color: var(--ok); } .rate.mid { background: var(--warn-soft); color: var(--warn); } .rate.bad { background: var(--err-soft); color: var(--err); }
+.txt-bad { color: var(--err); }
+.sheet.wide { max-width: 1100px; width: min(1100px, 100%); }
+@media print { .seg, .rep-filters { display: none; } }
+@media (max-width: 899px) {
+  .rep-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .sheet .rep-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sheet .rep-kpis .kpi { padding: 8px 10px; } .sheet .rep-kpis .kpi > span { font-size: 11.5px; } .sheet .rep-kpis .kpi b { font-size: 17px; }
+}
+.tbl td:first-child { min-width: 120px; }
