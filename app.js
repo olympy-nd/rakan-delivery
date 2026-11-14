@@ -14,6 +14,23 @@
   function N(n) { return '<span class="num">' + esc(n) + '</span>'; }
   function hm(ts) { return ts ? N(String(ts).slice(11, 16)) : ''; }
   function today() { return RK.nowStr().slice(0, 10); }
+  // عرض التاريخ بصيغة واحدة في كل المنظومة: 14/11/2026، والصيغة الطويلة: السبت 14 نوفمبر 2026
+  var AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  var AR_DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+  function dmy(ts) { var d = String(ts || '').slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) : d; }
+  function dlong(ts, noYear) {
+    var d = String(ts || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    var w = new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))).getUTCDay();
+    return AR_DAYS[w] + ' ' + (+d.slice(8, 10)) + ' ' + AR_MONTHS[+d.slice(5, 7) - 1] + (noYear ? '' : ' ' + d.slice(0, 4));
+  }
+  // حقل تاريخ يعرض التاريخ بالعربية؛ الضغط عليه يفتح تقويم الجهاز
+  function dateField(id, value, o) {
+    o = o || {};
+    return '<label class="datebtn' + (o.cls ? ' ' + o.cls : '') + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>' +
+      '<span>' + esc(o.short ? dmy(value) : dlong(value)) + '</span><input type="date" id="' + id + '" value="' + esc(value) + '"' + (o.max ? ' max="' + esc(o.max) + '"' : '') + ' aria-label="' + esc(o.label || 'التاريخ') + '"></label>';
+  }
+  function bindDates(el) { qa('.datebtn input', el).forEach(function (i) { i.addEventListener('click', function () { try { if (i.showPicker) i.showPicker(); } catch (e) {} }); }); }
   function q(sel, el) { return (el || document).querySelector(sel); }
   function qa(sel, el) { return Array.prototype.slice.call((el || document).querySelectorAll(sel)); }
   var ICON = {
@@ -38,6 +55,7 @@
   }
 
   function call(action, body, opts) {
+    if (st.user && canSwitchBr()) body = Object.assign({ br: curBr() }, body || {});
     return RK.api(action, body, opts).then(function (r) {
       if (r.ok) return r;
       if (r.error === 'auth') { logout(r.msg || 'انتهت الجلسة، سجّل الدخول من جديد'); throw new Error(r.msg || 'سجّل الدخول'); }
@@ -131,7 +149,7 @@
       st.user = v[2]; st.settings = v[3] || {};
       if (st.user.must_change) return renderChangePin();
       startApp();
-      if (navigator.onLine) call('me').then(function (r) { st.user = r.user; st.settings = r.settings; S.set('user', r.user); S.set('settings', r.settings); }).catch(function () {});
+      if (navigator.onLine) call('me').then(function (r) { st.user = r.user; st.settings = r.settings; S.set('user', r.user); S.set('settings', r.settings); shellUI(); }).catch(function () {});
     });
   }
 
@@ -194,6 +212,37 @@
     };
   }
 
+  /* ===================== الفرع (مساحة العمل) =====================
+   * عند قراءة أكثر من قاعدة سراج تنفصل المعاملات: كل مستخدم يعمل داخل فرع واحد.
+   * المربوط بفرع يبقى فيه دائماً، وغير المربوط (كل الفروع) يبدّل من أعلى الشاشة. */
+  function brList() { return (st.settings && st.settings.branches) || []; }
+  function multiWs() { return brList().length > 1; }
+  function canSwitchBr() { return multiWs() && !(st.user && st.user.ws); }
+  function curBr() {
+    if (!multiWs()) return '';
+    if (st.user && st.user.ws) return st.user.ws;
+    if (!st.br) { try { st.br = localStorage.getItem('rk:br') || 'main'; } catch (e) { st.br = 'main'; } }
+    if (!brList().some(function (b) { return b.code === st.br; })) st.br = 'main';
+    return st.br;
+  }
+  function curBrName() { var c = curBr(), b = brList().filter(function (x) { return x.code === c; })[0]; return b ? b.name : ''; }
+  function switchBr() {
+    var cur = curBr();
+    sheet('اختر الفرع', '<p class="muted" style="margin:0 0 12px">معاملات كل فرع مستقلة: فواتيره وسائقوه وكشوفه وتقاريره.</p><div class="list">' + brList().map(function (b) {
+      return '<button class="item tap' + (b.code === cur ? ' sel' : '') + '" data-br="' + esc(b.code) + '" style="text-align:start"><div class="main"><b>' + esc(b.name) + '</b></div>' + (b.code === cur ? '<span class="badge b-delivered">الحالي</span>' : '') + '</button>';
+    }).join('') + '</div>', function (s) {
+      qa('[data-br]', s.el).forEach(function (x) {
+        x.onclick = function () {
+          s.close();
+          if (x.dataset.br === cur) return;
+          st.br = x.dataset.br; try { localStorage.setItem('rk:br', st.br); } catch (e) {}
+          st.board = null; st.customers = null; st.locs = null; st.locsOk = null; st.sel = {}; st.region = null; st.driverSel = null;
+          render(); refresh(false); toast('تعمل الآن على: ' + curBrName());
+        };
+      });
+    });
+  }
+
   /* ===================== الهيكل ===================== */
   var TABS = {
     manager: [['today', 'اليوم'], ['follow', 'المتابعة'], ['map', 'الخريطة'], ['trips', 'الكشوف'], ['back', 'الإيصالات والمخزن'], ['locs', 'المواقع'],
@@ -205,15 +254,48 @@
     driver: [['my', 'فواتيري'], ['mysum', 'ملخصي']]
   };
 
+  var TAB_ICON = {
+    today: '<path d="M4 7h16M4 12h10M4 17h7"/><path d="M17 15l2 2 3-4"/>', follow: '<path d="M3 6h11v10H3zM14 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+    map: '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>', trips: '<path d="M7 3h10v18l-5-3-5 3z"/><path d="M10 8h4M10 12h4"/>',
+    back: '<path d="M4 8l8-5 8 5v11H4z"/><path d="M9 19v-6h6v6"/>', locs: '<circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+    reports: '<path d="M5 20V10M12 20V4M19 20v-7"/>', users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5a3.5 3.5 0 0 1 0 7M18 14.5a6 6 0 0 1 3.5 5.5"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+    audit: '<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h3"/>', addloc: '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><path d="M12 7v5M9.5 9.5h5"/>',
+    my: '<path d="M6 3h12v18l-6-3-6 3z"/>', mysum: '<path d="M5 20V10M12 20V4M19 20v-7"/>', more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'
+  };
+  function tabIcon(k) { return '<svg class="ti" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (TAB_ICON[k] || TAB_ICON.today) + '</svg>'; }
+  // تجميع الصفحات في القائمة الجانبية
+  var TAB_GROUP = { today: 'العمل اليومي', follow: 'العمل اليومي', map: 'العمل اليومي', trips: 'العمل اليومي', back: 'العمل اليومي', my: '', mysum: '', addloc: '',
+    locs: 'البيانات والتقارير', reports: 'البيانات والتقارير', users: 'الإدارة', settings: 'الإدارة', audit: 'الإدارة' };
+  var TAB_SHORT = { back: 'الإيصالات', addloc: 'موقع عميل', audit: 'السجل' };
+  function isPhone() { return window.matchMedia('(max-width: 899px)').matches; }
+  function tabName(k) { var t = (TABS[st.user.role] || []).filter(function (x) { return x[0] === k; })[0]; return t ? t[1] : ''; }
+  function goTab(k) { st.tab = k; render(); refresh(true); window.scrollTo(0, 0); }
+
   function startApp() {
     var tabs = TABS[st.user.role] || [];
     if (!st.tab || !tabs.some(function (t) { return t[0] === st.tab; })) st.tab = tabs[0] && tabs[0][0];
-    $app.innerHTML = '<div class="strip"></div><header class="top"><div class="top-in"><img class="logo" src="logo.png" alt="راكان">' +
-      '<div class="who"><b>' + esc(st.user.name) + '</b><span>' + esc(st.user.role_ar || '') + (st.user.truck ? ' · ' + esc(st.user.truck) : '') + '</span></div>' +
-      '<span class="net" id="net"></span><button class="iconbtn" id="rf" aria-label="تحديث">' + ICON.refresh + '</button>' +
-      '<button class="iconbtn" id="lo" aria-label="خروج">' + ICON.out + '</button></div>' +
-      (tabs.length > 1 ? '<nav class="tabs" id="tabs">' + tabs.map(function (t) { return '<button class="tab" data-tab="' + t[0] + '">' + esc(t[1]) + '<span class="cnt" hidden></span></button>'; }).join('') + '</nav>' : '') +
-      '</header><div class="pendbar" id="pb" hidden></div><main id="main"></main>';
+    var phone = isPhone(); st.phone = phone;
+    var cnt = '<span class="cnt" hidden></span>';
+    var nav = '';
+    if (tabs.length > 1 && !phone) {
+      var last = null;
+      nav = '<aside class="side"><div class="side-brand"><img class="logo" src="logo.png" alt="راكان"></div><div id="brbox"></div><nav class="side-nav" id="tabs">' + tabs.map(function (t) {
+        var g = TAB_GROUP[t[0]] || '', head = g && g !== last ? '<div class="side-g">' + esc(g) + '</div>' : ''; last = g || last;
+        return head + '<button class="tab side-i" data-tab="' + t[0] + '">' + tabIcon(t[0]) + '<span>' + esc(t[1]) + '</span>' + cnt + '</button>';
+      }).join('') + '</nav><div class="side-user"><div class="av">' + esc(String(st.user.name || '').trim().charAt(0)) + '</div><div class="grow"><b>' + esc(st.user.name) + '</b><span>' + esc(st.user.role_ar || '') + '</span></div></div></aside>';
+    } else if (tabs.length > 1) {
+      var main = tabs.length > 5 ? tabs.slice(0, 4) : tabs;
+      nav = '<nav class="bnav" id="tabs">' + main.map(function (t) { return '<button class="tab bn-i" data-tab="' + t[0] + '">' + tabIcon(t[0]) + '<span>' + esc(TAB_SHORT[t[0]] || t[1]) + '</span>' + cnt + '</button>'; }).join('') +
+        (tabs.length > main.length ? '<button class="bn-i" data-more aria-label="المزيد">' + tabIcon('more') + '<span>المزيد</span>' + cnt + '</button>' : '') + '</nav>';
+    }
+    $app.innerHTML = '<div class="strip"></div><div class="shell' + (nav && !phone ? ' has-side' : '') + (nav && phone ? ' has-bnav' : '') + '">' + (phone ? '' : nav) +
+      '<div class="shell-b"><header class="top"><div class="top-in">' + (phone || !nav ? '<img class="logo" src="logo.png" alt="راكان">' : '') +
+      '<div class="who"><h1 id="ptitle"></h1><span id="psub"></span></div>' +
+      (phone ? '<span id="brbox"></span>' : '') +
+      '<span class="net" id="net"></span><button class="iconbtn" id="rf" aria-label="تحديث" title="تحديث">' + ICON.refresh + '</button>' +
+      '<button class="iconbtn" id="lo" aria-label="خروج" title="خروج">' + ICON.out + '</button></div>' +
+      '</header><div class="pendbar" id="pb" hidden></div><main id="main"></main></div>' + (phone ? nav : '') + '</div>';
     q('#rf').onclick = function () { flushNow(); refresh(false); };
     q('#lo').onclick = function () {
       RK.pendingCount().then(function (p) {
@@ -225,12 +307,47 @@
         });
       });
     };
-    qa('[data-tab]').forEach(function (b) { b.onclick = function () { st.tab = b.dataset.tab; render(); refresh(true); }; });
+    qa('[data-tab]').forEach(function (b) { b.onclick = function () { goTab(b.dataset.tab); }; });
+    var more = q('[data-more]');
+    if (more) more.onclick = function () {
+      var rest = tabs.slice(4), last2 = null;
+      sheet('المزيد', '<div class="more-list">' + rest.map(function (t) {
+        var g = TAB_GROUP[t[0]] || '', head = g && g !== last2 ? '<div class="side-g">' + esc(g) + '</div>' : ''; last2 = g || last2;
+        return head + '<button class="tab more-i' + (st.tab === t[0] ? ' on' : '') + '" data-tab="' + t[0] + '">' + tabIcon(t[0]) + '<span>' + esc(t[1]) + '</span>' + (st.cnts && st.cnts[t[0]] ? '<span class="cnt">' + st.cnts[t[0]] + '</span>' : '') + '</button>';
+      }).join('') + '</div>', function (s) {
+        qa('[data-tab]', s.el).forEach(function (b) { b.onclick = function () { s.close(); goTab(b.dataset.tab); }; });
+      });
+    };
+    if (!startApp.bound) {
+      startApp.bound = true;
+      window.addEventListener('resize', function () { if (st.user && q('#main') && isPhone() !== st.phone) startApp(); });
+    }
     netUI();
     pendUI();
     render();
     refresh(false);
     flushNow();
+  }
+
+  // عنوان الصفحة، اسم المستخدم والفرع، وإبراز الصفحة الحالية في القائمة
+  function shellUI() {
+    var t = q('#ptitle'), sub = q('#psub');
+    var tabs = TABS[st.user.role] || [];
+    if (t) t.textContent = tabs.length > 1 ? tabName(st.tab) : st.user.name;
+    if (sub) sub.textContent = tabs.length > 1 ? (st.phone ? st.user.name : '') : (st.user.role_ar || '') + (st.user.truck ? ' · ' + st.user.truck : '');
+    var more = q('[data-more]');
+    if (more) more.classList.toggle('on', tabs.slice(4).some(function (x) { return x[0] === st.tab; }));
+    var bb = q('#brbox');
+    if (bb) {
+      var sig = multiWs() ? curBr() + '|' + canSwitchBr() + '|' + curBrName() : '';
+      if (bb.dataset.sig !== sig) {
+        bb.dataset.sig = sig;
+        bb.innerHTML = !multiWs() ? '' : canSwitchBr()
+          ? '<button class="brsw" id="brsw" aria-label="تبديل الفرع"><span class="brsw-l">الفرع</span><b>' + esc(curBrName()) + '</b><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button>'
+          : '<span class="brsw fixed"><span class="brsw-l">الفرع</span><b>' + esc(curBrName()) + '</b></span>';
+        var sw = q('#brsw'); if (sw) sw.onclick = switchBr;
+      }
+    }
   }
 
   function netUI() {
@@ -248,6 +365,7 @@
     try {
       if (v) m.innerHTML = v.html();
       if (v && v.bind) v.bind(m);
+      bindDates(m); shellUI();
     } catch (e) {
       m.innerHTML = '<div class="msg err">حدث خطأ في عرض الشاشة: ' + esc(e.message) + '. اضغط زر التحديث.</div>';
       if (window.console) console.error(e);
@@ -771,13 +889,13 @@
   function tabCounts() {
     var b = st.board;
     if (!b) return;
-    var set = function (tab, n) { var el = q('[data-tab="' + tab + '"] .cnt'); if (el) { el.hidden = !n; el.textContent = n; } };
+    var set = function (tab, n) { (st.cnts = st.cnts || {})[tab] = n; var mo = q('[data-more] .cnt'); if (mo && !q('[data-tab="' + tab + '"]')) { mo.hidden = !n; mo.textContent = n; } var el = q('[data-tab="' + tab + '"] .cnt'); if (el) { el.hidden = !n; el.textContent = n; } };
     set('today', b.alerts.length);
     set('locs', (b.alerts.filter(function (a) { return a.kind === 'locs'; })[0] || {}).text ? Number(String(b.alerts.filter(function (a) { return a.kind === 'locs'; })[0].text).split(' ')[0]) : 0);
   }
 
   // الفروع: تظهر الشارة والفلتر فقط إذا كان الوكيل يقرأ أكثر من قاعدة
-  function multiBr(b) { return !!(b && b.branches && b.branches.length > 1); }
+  function multiBr() { return false; }
   function brName(b, code) { var x = ((b && b.branches) || []).filter(function (y) { return y.code === (code || ''); })[0]; return x ? x.name : (code || ''); }
   function brBadge(b, code) { return multiBr(b) ? '<span class="badge b-br' + (code ? ' alt' : '') + '">' + esc(brName(b, code)) + '</span>' : ''; }
 
@@ -794,15 +912,23 @@
       if (b.regions.length > 1) h += '<div class="chips">' + b.regions.map(function (r) { return '<button class="chip' + (r.id === reg ? ' on' : '') + '" data-reg="' + esc(r.id) + '">' + esc(r.name) + '</button>'; }).join('') + '</div>';
       var beat = b.agent.last_beat, late = beat && (Date.now() - parseTs(beat) > 10 * 60000);
       var isToday = b.date === today();
-      h += '<div class="card"><div class="row"><div class="grow"><div class="daypick"><h2 style="margin:0">يوم العمل</h2><input type="date" class="input num" id="dpick" value="' + esc(b.date) + '" aria-label="تاريخ يوم العمل">' +
+      h += '<div class="card"><div class="row"><div class="grow"><div class="daypick"><h2 style="margin:0">يوم العمل</h2>' + dateField('dpick', b.date, { label: 'تاريخ يوم العمل' }) +
         (isToday ? '<span class="badge b-on_way">اليوم</span>' : '<span class="badge b-partial">ليس اليوم</span><button class="btn sm ghost" data-today>العودة لليوم</button>') +
         (b.regions.length > 1 ? '<span class="muted">· ' + esc(regionName(reg)) + '</span>' : '') + '</div>' +
-        '<div class="small ' + (late ? '' : 'muted') + '" style="' + (late ? 'color:var(--orange);font-weight:700' : '') + '">آخر مزامنة من سراج: ' + (beat ? hm(beat) + ' (' + N(beat.slice(0, 10)) + ')' : 'لا يوجد') + (late ? ' · تحقّق من الجهاز الرئيسي' : '') + '</div></div>';
+        '<div class="small ' + (late ? '' : 'muted') + '" style="' + (late ? 'color:var(--orange);font-weight:700' : '') + '">آخر مزامنة من سراج: ' + (beat ? hm(beat) + ' (' + N(dmy(beat)) + ')' : 'لا يوجد') + (late ? ' · تحقّق من الجهاز الرئيسي' : '') + '</div></div>';
       if (ses.open_other) h += '</div><div class="msg warn" style="margin-top:10px">يوم ' + N(ses.open_other.date) + ' ما زال مفتوحاً لهذه المنطقة. أغلقه أولاً من زر «إغلاق اليوم».</div><button class="btn danger" data-close="' + esc(ses.open_other.id) + '" style="margin-top:10px">إغلاق يوم ' + N(ses.open_other.date) + '</button>';
       else if (!ses.session) h += '<button class="btn accent" data-open>فتح يوم العمل</button></div>';
       else if (ses.session.status === 'مفتوحة') h += '<span class="badge b-delivered">مفتوح</span><button class="btn sm danger" data-close="' + esc(ses.session.id) + '">إغلاق اليوم</button></div>';
       else h += '<span class="badge">مُغلق</span>' + (st.user.role === 'manager' ? '<button class="btn sm" data-reopen>إعادة فتح</button>' : '') + '</div>';
       h += '</div>';
+      // ملخص اليوم في نظرة واحدة
+      var act = b.active.filter(function (a) { return a.region_id === reg; });
+      var onRoad = act.filter(function (a) { return ['assigned', 'on_way', 'arrived'].indexOf(a.state) >= 0; }).length;
+      var doneN = act.length - onRoad, waitN = b.pending.filter(function (p) { return p.region_id === reg; }).length;
+      h += '<div class="kpis day-kpis"><div class="kpi' + (waitN ? ' warn' : '') + '"><span>بانتظار التعيين</span><b class="num">' + waitN + '</b></div>' +
+        '<div class="kpi"><span>مع السائقين الآن</span><b class="num">' + onRoad + '</b></div>' +
+        '<div class="kpi"><span>انتهت اليوم</span><b class="num">' + doneN + '</b></div>' +
+        '<div class="kpi' + (b.alerts.length ? ' warn' : '') + '"><span>تنبيهات</span><b class="num">' + b.alerts.length + '</b></div></div>';
       var al = b.alerts;
       if (al.length) h += '<div class="card"><h2>تنبيهات تحتاج انتباهك (' + N(al.length) + ')</h2><div class="list">' + al.map(function (x, i) {
         var act = '';
@@ -847,7 +973,7 @@
           return g.map(function (p) {
             return '<label class="item tap' + (st.sel[p.id] ? ' sel' : '') + (p.old ? ' old' : '') + '">' + (open ? '<input type="checkbox" data-sel="' + esc(p.id) + '"' + (st.sel[p.id] ? ' checked' : '') + '>' : '') +
               '<div class="main"><b>' + esc(p.cust_name) + '</b><div class="meta">' + (p.kind === 'مرتجع مبيع' ? '<span class="badge b-ret">مرتجع</span>' : '<span class="badge">مبيع</span>') +
-              brBadge(b, p.src) + '<span>فاتورة ' + N(p.number) + '</span><span>' + hm(p.dt) + (p.old ? ' · ' + N(p.dt.slice(0, 10)) : '') + '</span>' + (p.net !== null && p.net !== undefined ? '<span>' + N(num(p.net)) + ' د.ل</span>' : '') +
+              brBadge(b, p.src) + '<span>فاتورة ' + N(p.number) + '</span><span>' + hm(p.dt) + (p.old ? ' · ' + N(dmy(p.dt)) : '') + '</span>' + (p.net !== null && p.net !== undefined ? '<span>' + N(num(p.net)) + ' د.ل</span>' : '') +
               (p.old ? '<span class="badge b-partial">من يوم سابق</span>' : '') + (p.status === 'معدّلة في سراج' ? '<span class="badge b-flag">معدّلة في سراج</span>' : '') + '</div>' +
               '<div class="small muted">' + esc(p.items) + '</div></div></label>';
           }).join('');
@@ -872,9 +998,9 @@
       if (td) td.onclick = function () { st.date = today(); st.sel = {}; st.board = null; render(); loadBoard().then(render).catch(function (e) { toast(e.message, true); }); };
       var o = q('[data-open]', m);
       if (o) o.onclick = function () {
-        var go = function () { busy(o, true); call('session_open', { region_id: st.region, date: b.date }).then(function () { toast('فُتح يوم العمل ' + b.date); return loadBoard(); }).then(render).catch(function (e) { busy(o, false); toast(e.message, true); }); };
+        var go = function () { busy(o, true); call('session_open', { region_id: st.region, date: b.date }).then(function () { toast('فُتح يوم العمل ' + dmy(b.date)); return loadBoard(); }).then(render).catch(function (e) { busy(o, false); toast(e.message, true); }); };
         if (b.date === today()) go();
-        else confirmBox('فتح يوم عمل', 'ستفتح يوم العمل بتاريخ <b class="num">' + esc(b.date) + '</b> وليس اليوم. هل أنت متأكد؟', 'نعم، افتحه').then(function (y) { if (y) go(); });
+        else confirmBox('فتح يوم عمل', 'ستفتح يوم العمل بتاريخ <b>' + esc(dlong(b.date)) + '</b> وليس اليوم. هل أنت متأكد؟', 'نعم، افتحه').then(function (y) { if (y) go(); });
       };
       var ro = q('[data-reopen]', m);
       if (ro) ro.onclick = function () { askReason('إعادة فتح اليوم', 'سبب إعادة الفتح').then(function (r) { if (r) call('session_open', { region_id: st.region, date: b.date, reason: r }).then(loadBoard).then(render).catch(function (e) { toast(e.message, true); }); }); };
@@ -1003,7 +1129,7 @@
       ['الوصول' + (a.arrive_dist !== '' && a.arrive_dist !== undefined ? ' · ' + a.arrive_dist + ' م من المحل' : '') + (a.arrive_flag ? ' · ' + a.arrive_flag : ''), a.arrive_at],
       [(STATE_AR[a.result] || 'النتيجة') + (a.reason ? ' · ' + a.reason : '') + (a.note ? ' · ' + a.note : ''), a.result_at],
       ['قرار المشرف: ' + a.decision, a.decision && a.updated], ['عاد الإيصال الموقّع', a.back_at], ['تأكيد المخزن', a.store_at], ['أُغلقت', a.closed_at]]
-      .filter(function (x) { return x[1]; }).map(function (x) { return '<div>' + esc(x[0]) + ' · ' + hm(x[1]) + ' <span class="muted small">' + N(String(x[1]).slice(0, 10)) + '</span></div>'; }).join('');
+      .filter(function (x) { return x[1]; }).map(function (x) { return '<div>' + esc(x[0]) + ' · ' + hm(x[1]) + ' <span class="muted small">' + N(dmy(x[1])) + '</span></div>'; }).join('');
     var acts = '';
     var arr = '';
     if (a.arrive_at) {
@@ -1184,7 +1310,7 @@
   function mvPanel() {
     var p = q('#mpanel'), D = MV.data;
     if (!p) return;
-    var head = '<div class="mp-head"><b class="grow">' + (MV.sel ? '' : 'السائقون على الخريطة') + '</b><input type="date" class="input mp-day num" id="mvday" value="' + esc(MV.day || today()) + '" max="' + today() + '" aria-label="اليوم"></div>';
+    var head = '<div class="mp-head"><b class="grow">' + (MV.sel ? '' : 'السائقون على الخريطة') + '</b>' + dateField('mvday', MV.day || today(), { max: today(), short: true, label: 'اليوم', cls: 'sm' }) + '</div>';
     if (MV.err && !D) { p.innerHTML = head + '<div class="msg err">' + esc(MV.err) + '</div>'; mvBindPanel(p); return; }
     if (!D) return;
     var sel = MV.sel && D.drivers.filter(function (d) { return d.id === MV.sel; })[0];
@@ -1277,7 +1403,7 @@
       };
       var meta = function (x) {
         return '<div class="p-meta"><div><span>رقم الإيصال</span><b class="num">' + esc(x.rec) + '</b></div><div><span>فاتورة سراج</span><b class="num">' + esc(x.inv_number) + '</b></div>' +
-          '<div><span>التاريخ</span><b class="num">' + esc(String(x.dt).slice(0, 10)) + '</b></div><div style="grid-column:span 2"><span>العميل</span><b>' + esc(x.cust_name) + '</b></div>' +
+          '<div><span>التاريخ</span><b class="num">' + esc(dmy(x.dt)) + '</b></div><div style="grid-column:span 2"><span>العميل</span><b>' + esc(x.cust_name) + '</b></div>' +
           '<div><span>المحطة</span><b class="num">' + esc(x.stop) + '</b></div><div><span>السائق</span><b>' + esc(t.driver_name) + '</b></div><div><span>الشاحنة</span><b>' + esc(t.truck || '—') + '</b></div>' +
           '<div><span>الكشف</span><b class="num">' + esc(t.code) + '</b></div></div>';
       };
@@ -1339,7 +1465,7 @@
         h += ord.map(function (dn) {
           return '<div class="card"><h3>' + esc(dn) + ' (' + N(byD[dn].length) + ')</h3><div class="list">' + byD[dn].map(function (a) {
             return '<div class="item"><div class="main"><b>' + esc(a.cust_name) + '</b><div class="meta">' + (isRet(a) ? '<span class="badge b-ret">مرتجع</span>' : '') + badge(a.result, STATE_AR[a.result]) +
-              '<span>فاتورة ' + N(a.inv_number) + '</span><span>إيصال ' + N(a.rec) + '</span><span>' + hm(a.result_at) + ' ' + N(String(a.result_at).slice(0, 10)) + '</span>' +
+              '<span>فاتورة ' + N(a.inv_number) + '</span><span>إيصال ' + N(a.rec) + '</span><span>' + hm(a.result_at) + ' ' + N(dmy(a.result_at)) + '</span>' +
               (a.carried ? '<span class="badge b-partial">مرحّلة ' + N(a.carried) + '</span>' : '') + '</div></div><button class="btn sm primary" data-rb="' + esc(a.rec) + '">استلام الإيصال</button></div>';
           }).join('') + '</div></div>';
         }).join('');
@@ -1453,7 +1579,7 @@
         var list = st.locsOk.filter(function (l) { return !t || String(l.cust_name).indexOf(t) >= 0 || String(l.branch).indexOf(t) >= 0; });
         return h + '<div class="field"><input id="lq" class="input" type="search" placeholder="بحث باسم العميل" value="' + esc(t) + '"></div><div class="list" id="lok">' + list.map(function (l) {
           return '<div class="card"><div class="row"><b class="grow">' + esc(l.cust_name) + (l.branch ? ' · ' + esc(l.branch) : '') + '</b><span class="badge b-delivered">معتمد</span></div>' +
-            '<div class="small muted">' + (l.decided_by ? 'اعتمده ' + esc(l.decided_by) + ' · ' + N(String(l.decided_at).slice(0, 16)) : 'سجّله ' + esc(l.by_name)) + (l.note ? ' · ' + esc(l.note) : '') + '</div>' +
+            '<div class="small muted">' + (l.decided_by ? 'اعتمده ' + esc(l.decided_by) + ' · ' + N(dmy(l.decided_at)) + ' ' + hm(l.decided_at) : 'سجّله ' + esc(l.by_name)) + (l.note ? ' · ' + esc(l.note) : '') + '</div>' +
             (l.desc ? '<p style="margin:6px 0">' + esc(l.desc) + '</p>' : '') +
             '<div class="row" style="margin-top:8px"><a class="btn sm ghost" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + l.lat + ',' + l.lng + '">' + ICON.pin + ' على الخريطة</a>' +
             '<button class="btn sm primary" data-edit="' + esc(l.id) + '">تعديل الموقع</button><button class="btn sm danger" data-del="' + esc(l.id) + '">حذف</button></div></div>';
@@ -1464,7 +1590,7 @@
       return h + '<div class="list">' + st.locs.map(function (l) {
         var d = l.approved ? Math.round(distM(l.lat, l.lng, l.approved.lat, l.approved.lng)) : null;
         return '<div class="card"><div class="row"><b class="grow">' + esc(l.cust_name) + (l.branch ? ' · ' + esc(l.branch) : '') + '</b><span class="badge b-partial">مقترح</span></div>' +
-          '<div class="small muted">سجّله ' + esc(l.by_name) + ' · ' + hm(l.at) + ' ' + N(String(l.at).slice(0, 10)) + (l.acc ? ' · دقة ±' + N(l.acc) + ' م' : '') + '</div>' +
+          '<div class="small muted">سجّله ' + esc(l.by_name) + ' · ' + hm(l.at) + ' ' + N(dmy(l.at)) + (l.acc ? ' · دقة ±' + N(l.acc) + ' م' : '') + '</div>' +
           (l.desc ? '<p style="margin:6px 0">' + esc(l.desc) + '</p>' : '') +
           (d !== null ? '<div class="msg warn">يوجد موقع معتمد سابق على بعد ' + N(num(d)) + ' م. الاعتماد يستبدله ويحفظ القديم في السجل.</div>' : '') +
           (l.history.length ? '<div class="small muted">مواقع تسليم سابقة لهذا العميل: ' + l.history.map(function (h2) { return N(Math.round(distM(l.lat, l.lng, h2.lat, h2.lng))) + ' م'; }).join('، ') + ' من الموقع المقترح</div>' : '') +
@@ -1553,7 +1679,7 @@
             L.circleMarker([l.lat, l.lng], { radius: 6, color: '#0C4CA2', weight: 2, fillOpacity: .15, dashArray: '3 3' }).addTo(map).bindTooltip('الموقع الحالي');
             (l.history || []).forEach(function (h) {
               L.circleMarker([h.lat, h.lng], { radius: 7, color: '#6B7280', weight: 1, fillColor: '#9CA3AF', fillOpacity: .9 }).addTo(map)
-                .bindTooltip('وصول سائق ' + N(String(h.at || '').slice(0, 10))).on('click', function () { acc = ''; place(h); });
+                .bindTooltip('وصول سائق ' + dmy(h.at)).on('click', function () { acc = ''; place(h); });
             });
             place(pos);
           } else getPos({ timeout: 8000 }).then(function (p) { if (p && !pos) { acc = p.acc; place(p, true); } });
@@ -1680,8 +1806,8 @@
     html: function () {
       var f = st.rep || { from: today(), to: today() };
       var r = st.repData;
-      var h = '<div class="card"><div class="row"><div class="field grow"><label for="rf1">من</label><input type="date" class="input" id="rf1" value="' + esc(f.from) + '"></div>' +
-        '<div class="field grow"><label for="rf2">إلى</label><input type="date" class="input" id="rf2" value="' + esc(f.to) + '"></div></div>' +
+      var h = '<div class="card"><div class="row"><div class="field grow"><label for="rf1">من</label>' + dateField('rf1', f.from, { label: 'من' }) + '</div>' +
+        '<div class="field grow"><label for="rf2">إلى</label>' + dateField('rf2', f.to, { label: 'إلى' }) + '</div></div>' +
         '<div class="chips" style="margin-top:10px">' + [['d', 'اليوم'], ['w', 'آخر 7 أيام'], ['m', 'هذا الشهر']].map(function (p) { return '<button class="chip" data-per="' + p[0] + '">' + p[1] + '</button>'; }).join('') +
         '</div><div class="row" style="margin-top:10px"><button class="btn primary" data-run>عرض</button><button class="btn ghost" data-csv>تصدير Excel</button><button class="btn ghost" data-prn>' + ICON.print + ' طباعة</button></div></div>';
       if (!r) return h + '<div class="loading"><span class="spin"></span></div>';
@@ -1732,18 +1858,19 @@
       if (!u) return '<div class="loading"><span class="spin"></span></div>';
       var h = '<div class="card"><h2>إضافة المستخدمين</h2><p class="muted small" style="margin:0 0 10px">أضف شخصاً واحداً، أو ارفع ملف Excel فيه كل السائقين والمشرفين دفعة واحدة. المناطق المكتوبة في الملف تُنشأ تلقائياً إن لم تكن موجودة.</p>' +
         '<div class="row"><button class="btn accent" data-new>+ مستخدم جديد</button><button class="btn primary" data-imp>رفع من ملف Excel</button><button class="btn ghost" data-tpl>تحميل نموذج Excel</button></div></div>' +
-        '<div class="row"><button class="btn" data-regs>المناطق (' + N(u.regions.length) + ')</button>' +
-        (u.regions.length > 1 ? '<button class="btn ghost" data-cr>توزيع العملاء على المناطق</button>' : '') + '</div>';
+        '<div class="row"><button class="btn" data-regs>المناطق (' + N(brRegions().length) + ')</button>' +
+        (brRegions().length > 1 ? '<button class="btn ghost" data-cr>توزيع العملاء على المناطق</button>' : '') + '</div>';
       ['supervisor', 'driver', 'storekeeper', 'rep', 'accountant', 'manager'].forEach(function (role) {
         var list = u.users.filter(function (x) { return x.role === role; });
         h += '<div class="sec-title"><h2>' + ROLE_AR[role] + ' (' + N(list.length) + ')</h2></div>';
         if (!list.length) { h += '<div class="card empty small">لا يوجد</div>'; return; }
         h += '<div class="list">' + list.map(function (x) {
           return '<div class="item tap" data-u="' + esc(x.id) + '"><div class="main"><b>' + esc(x.name) + (x.active ? '' : ' <span class="badge">موقوف</span>') + '</b><div class="meta"><span class="ltr">' + esc(x.username) + '</span>' +
+            (multiWs() ? '<span class="badge b-br">' + esc(x.ws ? (brList().filter(function (b) { return b.code === x.ws; })[0] || {}).name || x.ws : 'كل الفروع') + '</span>' : '') +
             (x.regions && x.regions !== '*' ? '<span>' + esc(x.regions.split(',').map(function (r) { return (u.regions.filter(function (g) { return g.id === r; })[0] || {}).name || r; }).join('، ')) + '</span>' : '') +
             (x.truck ? '<span>' + esc(x.truck) + '</span>' : '') + (x.role === 'driver' ? '<span>' + (x.device ? 'الهاتف مسجّل' : 'لم يسجّل هاتفاً بعد') + '</span>' : '') +
             (x.device_req ? '<span class="badge b-partial">يطلب هاتفاً جديداً</span>' : '') + (x.must_change ? '<span class="badge">لم يدخل بعد</span>' : '') +
-            (x.last_seen ? '<span>آخر ظهور ' + hm(x.last_seen) + ' ' + N(x.last_seen.slice(0, 10)) + '</span>' : '') + '</div></div></div>';
+            (x.last_seen ? '<span>آخر ظهور ' + hm(x.last_seen) + ' ' + N(dmy(x.last_seen)) + '</span>' : '') + '</div></div></div>';
         }).join('') + '</div>';
       });
       return h;
@@ -1760,6 +1887,8 @@
     }
   };
 
+  // مناطق الفرع المعروض فقط (عند وجود أكثر من فرع)
+  function brRegions() { var c = curBr(); return (st.users && st.users.regions || []).filter(function (r) { return !c || (r.ws || 'main') === c; }); }
   function userForm(u) {
     var regs = st.users.regions.filter(function (r) { return r.active; });
     var isNew = !u;
@@ -1769,7 +1898,8 @@
       '<div class="field"><label for="un">الاسم الكامل</label><input id="un" class="input" value="' + esc(u.name || '') + '" required></div>' +
       '<div class="field"><label for="uu">اسم المستخدم (بالإنجليزية، للدخول)</label><input id="uu" class="input ltr" value="' + esc(u.username || '') + '" autocapitalize="none" placeholder="مثل ali.m" required></div>' +
       '<div class="field"><label for="ur">الدور</label><select id="ur" class="input">' + Object.keys(ROLE_AR).map(function (k) { return '<option value="' + k + '"' + (u.role === k ? ' selected' : '') + '>' + ROLE_AR[k] + '</option>'; }).join('') + '</select></div>' +
-      '<div class="field" id="urg"><span class="lbl">المناطق</span><div class="chips">' + regs.map(function (r) { return '<label class="chip' + (ur.indexOf(r.id) >= 0 ? ' on' : '') + '"><input type="checkbox" value="' + esc(r.id) + '"' + (ur.indexOf(r.id) >= 0 ? ' checked' : '') + ' hidden>' + esc(r.name) + '</label>'; }).join('') + '</div></div>' +
+      (multiWs() ? '<div class="field"><label for="uw">الفرع</label><select id="uw" class="input"><option value="">كل الفروع (يبدّل بينها من أعلى الشاشة)</option>' + brList().map(function (b) { return '<option value="' + esc(b.code) + '"' + ((isNew ? curBr() : u.ws) === b.code ? ' selected' : '') + '>' + esc(b.name) + ' فقط</option>'; }).join('') + '</select><span class="small muted">المستخدم المربوط بفرع لا يرى إلا معاملات ذلك الفرع.</span></div>' : '') +
+      '<div class="field" id="urg"><span class="lbl">المناطق</span><div class="chips">' + regs.map(function (r) { return '<label data-ws="' + esc(r.ws || 'main') + '" class="chip' + (ur.indexOf(r.id) >= 0 ? ' on' : '') + '"><input type="checkbox" value="' + esc(r.id) + '"' + (ur.indexOf(r.id) >= 0 ? ' checked' : '') + ' hidden>' + esc(r.name) + '</label>'; }).join('') + '</div></div>' +
       '<div class="field" id="utr"><label for="ut">الشاحنة (للسائق)</label><input id="ut" class="input" value="' + esc(u.truck || '') + '" placeholder="النوع ورقم اللوحة"></div>' +
       '<div class="field"><label for="up">رقم الهاتف</label><input id="up" class="input ltr" inputmode="tel" value="' + esc(u.phone || '') + '"></div>' +
       '<div class="field" id="uem"><label for="ue">البريد الإلكتروني (للمدير)</label><input id="ue" class="input ltr" value="' + esc(u.email || '') + '"></div>' +
@@ -1785,6 +1915,15 @@
         q('#uem', s.el).hidden = r !== 'manager';
       }
       role.onchange = vis; vis();
+      var uw = q('#uw', s.el);
+      function wsVis() {
+        if (!uw) return;
+        qa('#urg label', s.el).forEach(function (l) {
+          var okk = !uw.value || l.dataset.ws === uw.value; l.hidden = !okk;
+          if (!okk) { q('input', l).checked = false; l.classList.remove('on'); }
+        });
+      }
+      if (uw) { uw.onchange = wsVis; wsVis(); }
       qa('#urg label', s.el).forEach(function (l) { l.onclick = function (e) { e.preventDefault(); var c = q('input', l); c.checked = !c.checked; l.classList.toggle('on', c.checked); }; });
       q('#uf', s.el).onsubmit = function (e) {
         e.preventDefault();
@@ -1792,7 +1931,7 @@
         var body = { id: u.id, name: q('#un', s.el).value.trim(), username: q('#uu', s.el).value.trim().toLowerCase(), role: role.value,
           regions: qa('#urg input:checked', s.el).map(function (c) { return c.value; }).join(','), truck: q('#ut', s.el).value.trim(),
           phone: q('#up', s.el).value.trim(), email: q('#ue', s.el).value.trim(),
-          active: isNew ? true : q('#ua', s.el).checked, reset_pin: !isNew && q('#upin', s.el).checked, reset_device: !isNew && q('#udev', s.el) && q('#udev', s.el).checked };
+          ws: uw ? uw.value : undefined, active: isNew ? true : q('#ua', s.el).checked, reset_pin: !isNew && q('#upin', s.el).checked, reset_device: !isNew && q('#udev', s.el) && q('#udev', s.el).checked };
         call('user_save', { user: body }).then(function (r) {
           s.close();
           if (r.pin) {
@@ -1937,7 +2076,7 @@
   }
 
   function regionsForm() {
-    var regs = st.users.regions;
+    var regs = brRegions();
     sheet('المناطق', '<div class="msg info">كل سائق وعميل يتبع منطقة، ولكل منطقة مشرف أو أكثر. العملاء غير الموزّعين يتبعون أول منطقة نشطة.</div><div class="list">' + regs.map(function (r) {
       return '<div class="item"><div class="main"><input class="input" data-rn="' + esc(r.id) + '" value="' + esc(r.name) + '"></div><label class="chk"><input type="checkbox" data-ra="' + esc(r.id) + '"' + (r.active ? ' checked' : '') + '> نشطة</label><button class="btn sm" data-rs="' + esc(r.id) + '">حفظ</button></div>';
     }).join('') + '</div><div class="row"><input class="input grow" id="nr" placeholder="اسم منطقة جديدة"><button class="btn accent" data-add>إضافة</button></div>', function (s) {
@@ -1947,7 +2086,7 @@
   }
 
   function custRegionsForm() {
-    var regs = st.users.regions.filter(function (r) { return r.active; });
+    var regs = brRegions().filter(function (r) { return r.active; });
     var s = sheet('توزيع العملاء على المناطق', '<div class="loading"><span class="spin"></span></div>');
     loadCustomers().then(function (cs) {
       s.el.innerHTML = '<input class="input" id="cq" placeholder="بحث"><div class="list" id="cl2">' + cs.map(function (c) {
